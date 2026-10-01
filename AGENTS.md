@@ -7,22 +7,26 @@ current as the project evolves.
 
 ## Project status
 
-**Phases 1–5A are complete.** The scaffold, the Supabase client foundation and
-the database schema/RLS/demo catalogue are in place, the customer-facing
+**Phases 1–5B-1 are complete.** The scaffold, the Supabase client foundation
+and the database schema/RLS/demo catalogue are in place, the customer-facing
 storefront (homepage, shop with filter/search/sort, product detail, cart) is
 built on top of the public catalogue, Google sign-in via Supabase Auth is
-working end to end, and `/checkout` is a protected, validated checkout form.
+working end to end, `/checkout` is a protected, validated checkout form, and the
+trusted `private.place_order()` function is the database-side order-creation
+boundary.
 
 Deliberately **not** built yet — do not assume any of this exists:
 
-- **Order creation.** `/checkout` collects and validates details and shows
-  totals, but submitting it creates nothing (see "Checkout (Phase 5A)")
+- **Order creation from the app.** The database function exists and is
+  verified, but nothing calls it yet: `/checkout` still creates nothing (see
+  "Checkout (Phase 5A)"). Phase 5B-2 wires the server up to it.
 - Bank transfer flow / payment instructions
 - Mailgun integration
 - Order confirmation page
 - Account area / order history (only sign-in, sign-out and a header state exist)
 - Admin functionality
 - Payment verification
+- Stock decrement or reservation
 
 ## Stack (as scaffolded — do not churn)
 
@@ -97,7 +101,7 @@ lib/supabase/
   proxy.ts            Session refresh helper used by /proxy.ts
 proxy.ts              Next.js 16 proxy: refreshes auth session per request
 supabase/migrations/  Applied SQL migrations (mirrors the live schema exactly)
-supabase/tests/       verify_phase2.sql — rollback-safe DB verification script
+supabase/tests/       Rollback-safe DB verification scripts (phase2, phase5b)
 .env.example          Documented env vars, placeholders only
 ```
 
@@ -185,6 +189,80 @@ Decisions worth knowing before changing anything here:
   `useWatch` (not `watch()`) subscribes the summary to the state field — the
   React Compiler treats RHF's `watch()` as an incompatible library and skips
   memoizing the component.
+
+## Order creation (Phase 5B-1 — the trusted database function)
+
+`private.place_order()` is the **only** way an order is ever written. It is
+database-only: no API route calls it yet, and `/checkout` is untouched.
+
+```sql
+private.place_order(
+  p_cart jsonb,                 -- [{"product_id": uuid, "quantity": 1, "size": "M"}]
+  p_customer_name text, p_customer_email text, p_customer_phone text,
+  p_delivery_address text, p_delivery_city text, p_delivery_state text
+) returns jsonb                 -- {order_id, order_number, subtotal, delivery_fee, total}
+```
+
+Decisions worth knowing before changing anything here:
+
+- **The client never supplies a number.** There is no `user_id`, `unit_price`,
+  `product_name`, `subtotal`, `delivery_fee`, `total` or `status` parameter. The
+  caller is `auth.uid()`, the money comes from `products.price`, the name
+  snapshot from `products.name`, and the status is the `awaiting_payment`
+  column default. Extra keys in the cart JSON are simply never read, so forged
+  prices are inert rather than rejected.
+- **Why direct client inserts stay disabled.** A permissive INSERT policy on
+  `orders` would let anyone forge prices, totals and user ids. The write
+  boundary is the function, not a policy, and it derives every value itself.
+  `authenticated` still holds `SELECT` on `orders` / `order_items` and nothing
+  more.
+- **`SECURITY DEFINER` is what makes it work** — it is the only reason the
+  insert succeeds without granting clients anything. It is owned by `postgres`,
+  pins `search_path = ''`, and fully qualifies every table.
+- **Privileges.** `revoke all on schema private from public, anon,
+  authenticated`, then `usage` to `authenticator` and `authenticated`, then
+  `revoke all on the function from public, anon` and `grant execute ... to
+  authenticated`. Verified: `anon` cannot execute it and has no `USAGE` on the
+  schema, so PostgREST answers `42501`.
+- **The `private` schema is exposed to PostgREST on purpose.** Supabase
+  exposes only `public, graphql_public`, and `rpc()` cannot route to a function
+  in a schema it does not expose — asking for `private` returns
+  `PGRST106 Invalid schema`. The migration therefore runs
+  `alter role authenticator set pgrst.db_schemas = 'public, graphql_public,
+  private'`. Phase 5B-2 calls
+  `supabase.schema('private').rpc('place_order', …)`; the function is *not* in
+  `public`, and `anon` still has no access.
+- **Errors are a stable contract.** Every business failure raises
+  `errcode = 'P0001'` with the machine code as the **message** and the human
+  text as `detail`: `UNAUTHENTICATED`, `INVALID_CART`, `EMPTY_CART`,
+  `INVALID_CART_ITEM`, `PRODUCT_NOT_FOUND`, `INVALID_SIZE`,
+  `INSUFFICIENT_STOCK`, `INVALID_CUSTOMER`, `INVALID_STATE`,
+  `ORDER_CREATION_FAILED`. Phase 5B-2 maps `code = P0001` to "expected
+  business failure" and switches on the message; anything else is unexpected.
+- **Stock is validated, never mutated.** There is no reservation, so two
+  customers can both pass the check for the last unit. That is a deliberate,
+  documented deferral: inventory mutation needs an explicit payment / order
+  lifecycle decision, not a side effect of checkout.
+- **Atomic by construction.** One function body is one transaction. The whole
+  cart is validated before the order row is written, and a failure anywhere
+  rolls the order and its items back together — there is no partial order.
+- **The canonical state list is duplicated on purpose.** The 36 states plus the
+  FCT are spelled out in SQL as well as in `lib/checkout/nigeria-states.ts`,
+  because the database must reject `"Lagos State"` even if the request never
+  passed through Zod. Keep the two lists in step.
+- **Two SQL gotchas this phase was bitten by.** `x = all (array)` is *not* a
+  membership test — it means "equals every element", so use `= any (array)` to
+  test membership and `<> all (array)` to test non-membership. And
+  `jsonb_typeof(missing_key)` is SQL `NULL`, and `NULL or NULL` is still
+  `NULL`, so every key needs an explicit `is null` test or a missing key slips
+  straight through the check.
+
+`supabase/tests/verify_phase5b.sql` proves all of the above against a live
+database: structure and privileges, the happy path, forged prices, every
+rejection with an assertion that nothing was written, direct-insert denial, and
+that stock is untouched. Like `verify_phase2.sql` it is pure SQL, runs inside
+one transaction and ends in `ROLLBACK`, so it leaves nothing behind.
+
 
 ## Supabase foundation
 
@@ -335,6 +413,14 @@ dashboard — add a migration.
 | `20260930220104_seed_products.sql` | 12 fictional products |
 | `20260930220536_tighten_anon_grants.sql` | anonymous callers lose the default `SELECT` on orders/order_items |
 | `20260930220757_tighten_client_grants.sql` | final least-privilege grant matrix |
+| `20261001181519_create_place_order_function.sql` | `private` schema + `private.place_order()` (Phase 5B-1) |
+| `20261001182454_fix_place_order_size_membership.sql` | size membership `all` → `any` (subtotal and stock were broken) |
+| `20261001182848_fix_place_order_missing_json_keys.sql` | explicit `is null` on every cart-item key |
+| `20261001183202_fix_place_order_zero_quantity.sql` | explicit `quantity >= 1` lower bound |
+
+The last three are append-only corrections to the same function. Each was found
+by `verify_phase5b.sql`, applied as its own migration, and its header explains
+the bug — do not edit an already-recorded migration to "tidy" it.
 
 `supabase/tests/verify_phase2.sql` re-runs every structural, RLS and
 constraint assertion against a live database. It creates fixtures inside a
@@ -507,7 +593,9 @@ rendering and responsive layout are not covered by it and must be checked by
 hand.
 
 Database changes additionally require re-running
-`supabase/tests/verify_phase2.sql` (see the Database section).
+`supabase/tests/verify_phase2.sql` (see the Database section). Order-creation
+changes require `supabase/tests/verify_phase5b.sql` as well — it is the only
+thing that proves the trusted function still computes money correctly.
 
 ### Verifying authentication
 
