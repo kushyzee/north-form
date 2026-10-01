@@ -7,21 +7,22 @@ current as the project evolves.
 
 ## Project status
 
-**Phases 1–5B-2 are complete.** The scaffold, the Supabase client foundation
+**Phases 1–5C are complete.** The scaffold, the Supabase client foundation
 and the database schema/RLS/demo catalogue are in place, the customer-facing
 storefront (homepage, shop with filter/search/sort, product detail, cart) is
 built on top of the public catalogue, Google sign-in via Supabase Auth is
-working end to end, `/checkout` is a protected, validated checkout form, and
-`POST /api/orders` calls the trusted `private.place_order()` function, which is
-the database-side order-creation boundary.
+working end to end, `/checkout` is a protected, validated checkout form,
+`POST /api/orders` calls the trusted `private.place_order()` function, and a
+placed order produces a database-backed confirmation page plus a Mailgun
+order-confirmation email.
 
 Deliberately **not** built yet — do not assume any of this exists:
 
 - **Payment verification.** An order is created `awaiting_payment` and nothing
   ever moves it on — no webhook, no admin action (see "Checkout (Phase 5A)")
-- Bank transfer flow / payment instructions beyond the confirmation copy
-- Mailgun integration
-- Account area / order history — the confirmation page is the only order page
+- Bank transfer flow / payment instructions beyond the confirmation copy and
+  the confirmation email
+- Order history — the confirmation page is the only order page
 - Admin functionality
 - Stock decrement or reservation
 
@@ -75,6 +76,7 @@ components/storefront/  Site shell and catalogue presentation (mostly RSC)
 components/cart/        Cart provider + cart UI (client)
 components/auth/        Sign-in page pieces, header auth state, sign-out
 components/checkout/    Checkout form, order summary, field wrapper (client)
+lib/email/            Order-confirmation template, Mailgun transport, notifier
 app/api/orders/         POST /api/orders — the order-creation API route
 lib/utils.ts          cn() re-export (shadcn convention)
 lib/format.ts         NGN / stock / item-count formatting
@@ -331,6 +333,68 @@ Decisions worth knowing before changing anything here:
   payment has not been received. **It must never get a `loading.tsx`** — same
   reason `/checkout` has none.
 
+## Order confirmation & email (Phase 5C)
+
+`/checkout/confirmation/[orderNumber]` shows a placed order, and a Mailgun email
+tells the customer about it.
+
+| File | Kind | Role |
+| ---- | ---- | ---- |
+| `app/checkout/confirmation/[orderNumber]/page.tsx` | RSC | Renders the order from the database |
+| `lib/orders/queries.ts` | server-only | `getOrderByNumber()` — the only read |
+| `lib/orders/payment-details.ts` | pure | `DEMO_BANK_TRANSFER`, `isAwaitingPayment()` |
+| `lib/email/order-confirmation.ts` | pure | `buildOrderConfirmationEmail()` → subject/text/html |
+| `lib/email/mailgun.ts` | pure | `readMailgunConfig()`, `buildMailgunRequest()` |
+| `lib/email/mailgun-transport.ts` | server-only | `sendMailgunMessage()` — the only `fetch` |
+| `lib/email/send-order-confirmation.ts` | server-only | Template → transport |
+| `lib/email/notify-order-placed.ts` | pure | Load, render, send — swallowing every failure |
+
+Decisions worth knowing before changing anything here:
+
+- **The page renders database values only.** Totals, status, items and address
+  all come from `getOrderByNumber`. Nothing is read from the URL except the
+  order number used to address the row, and nothing from the checkout form
+  survives the redirect.
+- **Ownership is RLS, not application logic.** `getOrderByNumber()` takes **no
+  user id**: `auth.uid()` in the `orders` policy decides what is readable, so
+  another customer's order number resolves to nothing and the page 404s. That
+  `404` is deliberately indistinguishable from a genuinely missing order —
+  returning `403` for "exists but not yours" and `404` for "does not exist"
+  would be an order-existence oracle.
+- **`requireAuthUser` is given this page's own path**, so a signed-out visitor
+  returns to *this* order after signing in rather than to `/checkout`.
+- **The email is secondary to the order.** The route awaits
+  `notifyOrderPlaced()` after a `201`, but the function cannot throw, is bounded
+  by an 8-second timeout, and its result is discarded. Mailgun refusing a
+  message, or the network dropping, can never turn a committed order into a
+  failed request. Verified live: a `403` from Mailgun still returned `201`.
+- **No email-log or idempotency table.** The trigger is one successful
+  `POST /api/orders`, not a page render, so **refreshing the confirmation page
+  sends nothing**. Retrying the POST after a network failure does create a
+  second order and a second email — the function creates one row per call, and
+  that is documented rather than papered over.
+- **Mailgun is called over plain `fetch`**, not an SDK: the REST API is one
+  authenticated form-encoded `POST`, and Node has had a global `fetch` since
+  18, so the dependency list is unchanged. `mailgun.ts` is split from
+  `mailgun-transport.ts` because a `server-only` module cannot be imported by a
+  test, and the request construction is exactly what is worth testing.
+- **Credentials never leave the transport.** The API key goes into an
+  Authorization header and nowhere else — the form body is asserted not to
+  contain it — and failure reasons are short tokens rather than Mailgun's
+  response body, which can echo the recipient and the domain.
+- **A missing configuration is not an error.** `readMailgunConfig()` returns
+  `null` and the order is placed anyway; only the email is skipped. Local
+  development and CI need no Mailgun account.
+- **Mailgun free/sandbox domains only send to authorised recipients** and
+  answer `403` otherwise. That is a Mailgun policy, not a bug: the identical
+  request shape returns `200 Queued` for an authorised address. Expect the send
+  to be skipped for any other address until the account is upgraded or the
+  recipient is added.
+- **Payment is never claimed.** The page and the email both say the payment is
+  pending and not yet received, and a test asserts the strings "payment
+  confirmed" / "payment received" / "order shipped" never appear. The order
+  stays `awaiting_payment`; nothing moves it on.
+
 ## Supabase foundation
 
 Packages: `@supabase/supabase-js`, `@supabase/ssr`, `server-only`.
@@ -455,7 +519,10 @@ gitignored — never commit real credentials.**
 - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — safe to
   expose; RLS is the actual security boundary.
 - `MAILGUN_*` — **server-side only.** Never add a `NEXT_PUBLIC_` prefix to
-  these, and only read them from Server Components/Actions/Route Handlers.
+  these, and only read them from Server Components/Actions/Route Handlers. All
+  three of `MAILGUN_API_KEY` / `MAILGUN_DOMAIN` / `MAILGUN_FROM_EMAIL` are
+  required; if any is missing the confirmation email is skipped and the order
+  still succeeds. `MAILGUN_FROM_NAME` is optional and defaults to the brand.
 - `SUPABASE_SECRET_KEY` — server-side only. Not used by Phase 4 auth (the
   callback exchanges codes with the publishable key); it is there for the
   server-side order-creation path in Phase 5.

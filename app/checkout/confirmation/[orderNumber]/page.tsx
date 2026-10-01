@@ -6,12 +6,13 @@ import { CheckCircle2 } from "lucide-react"
 import { buttonVariants } from "@/components/ui/button"
 import { requireAuthUser } from "@/lib/auth/session"
 import { getOrderByNumber } from "@/lib/orders/queries"
+import { DEMO_BANK_TRANSFER, isAwaitingPayment } from "@/lib/orders/payment-details"
 import { formatNaira } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export const metadata: Metadata = {
-  title: "Order confirmed",
-  description: "Your NORTH & FORM order has been placed and is awaiting payment.",
+  title: "Order received",
+  description: "Your NORTH & FORM order has been received and is awaiting payment.",
 }
 
 type ConfirmationPageProps = PageProps<"/checkout/confirmation/[orderNumber]">
@@ -38,43 +39,46 @@ export default async function OrderConfirmationPage({
 }: ConfirmationPageProps) {
   const { orderNumber } = await params
 
-  await requireAuthUser("/checkout")
+  // Signed out, come back to *this* order rather than to the checkout page.
+  await requireAuthUser(`/checkout/confirmation/${orderNumber}`)
   const order = await getOrderByNumber(orderNumber)
 
   if (!order) notFound()
 
+  const awaitingPayment = isAwaitingPayment(order.status)
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-12 sm:px-6 lg:px-8 lg:py-16">
       <div className="mx-auto max-w-2xl">
-        <CheckCircle2 aria-hidden="true" className="size-8 text-brand-olive" />
+        <p className="text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
+          North <span aria-hidden="true">&amp;</span> Form
+        </p>
 
-        <h1 className="mt-6 font-heading text-3xl tracking-tight sm:text-4xl">
-          Thank you — your order is in
+        <CheckCircle2 aria-hidden="true" className="mt-6 size-8 text-brand-olive" />
+
+        <h1 className="mt-4 font-heading text-3xl tracking-tight sm:text-4xl">
+          Order received
         </h1>
 
-        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+        {/* Status comes from the database. The wording never claims the money
+            has arrived: payment verification is a later phase and the order
+            stays `awaiting_payment` until a human moves it. */}
+        <p className="mt-4 inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-xs font-medium tracking-wide uppercase">
+          {awaitingPayment ? "Payment pending" : order.status.replace(/_/g, " ")}
+        </p>
+
+        <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+          {awaitingPayment
+            ? "We have your order and we have not received your payment yet. Transfer the total using the details below, quoting your order reference."
+            : "Your order is recorded with the status above."}{" "}
+          We will use {order.customerEmail} to keep you updated.
+        </p>
+
+        <p className="mt-6 text-sm leading-relaxed text-muted-foreground">
           Quote this reference if you need to get in touch about the order:
         </p>
 
-        <p className="mt-3 font-mono text-xl tracking-tight">{order.orderNumber}</p>
-
-        {/* Nothing here marks the order as paid. Payment verification is a later
-            phase; the order stays `awaiting_payment` until a human confirms the
-            transfer, and this copy says so rather than implying otherwise. */}
-        <div className="mt-6 rounded-lg border border-border bg-card p-5">
-          <p className="text-sm">
-            <span className="font-medium">Status:</span>{" "}
-            <span className="text-muted-foreground">
-              {order.status === "awaiting_payment"
-                ? "Awaiting payment — we have not received your transfer yet."
-                : order.status.replace(/_/g, " ")}
-            </span>
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Your order is saved. We will email {order.customerEmail} once payment
-            lands.
-          </p>
-        </div>
+        <p className="mt-2 font-mono text-xl tracking-tight">{order.orderNumber}</p>
 {/* What was ordered, at the prices the database recorded. */}
         <section aria-labelledby="confirmation-items" className="mt-10">
           <h2 id="confirmation-items" className="font-heading text-lg">
@@ -122,6 +126,53 @@ export default async function OrderConfirmationPage({
               {formatNaira(order.total)}
             </span>
           </div>
+        </section>
+{/* Payment instructions. Marked as demonstration details because they
+            are — this storefront has no real account. */}
+        <section aria-labelledby="confirmation-payment" className="mt-10">
+          <h2 id="confirmation-payment" className="font-heading text-lg">
+            How to pay
+          </h2>
+
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            We do not take card payments. Transfer{" "}
+            <span className="font-medium text-foreground">
+              {formatNaira(order.total)}
+            </span>{" "}
+            to the account below, quoting{" "}
+            <span className="font-mono text-foreground">{order.orderNumber}</span>{" "}
+            as the reference.
+          </p>
+
+          <dl className="mt-4 rounded-lg border border-border bg-card p-5 text-sm">
+            <div className="flex flex-wrap gap-x-2">
+              <dt className="text-muted-foreground">Bank</dt>
+              <dd className="font-medium">{DEMO_BANK_TRANSFER.bank}</dd>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-2">
+              <dt className="text-muted-foreground">Account name</dt>
+              <dd className="font-medium">{DEMO_BANK_TRANSFER.accountName}</dd>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-2">
+              <dt className="text-muted-foreground">Account number</dt>
+              {/* Monospace and selectable so it can be copied accurately. */}
+              <dd className="font-mono text-base font-medium tracking-wider [user-select:all]">
+                {DEMO_BANK_TRANSFER.accountNumber}
+              </dd>
+            </div>
+          </dl>
+
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            These are demonstration bank details for this storefront.
+          </p>
+
+          <p className="mt-4 text-sm leading-relaxed">
+            <span className="font-medium">Payment is not yet received.</span>{" "}
+            <span className="text-muted-foreground">
+              Your order stays awaiting payment until we confirm the transfer
+              ourselves. Nothing on this page marks it as paid.
+            </span>
+          </p>
         </section>
 
         <section aria-labelledby="confirmation-delivery" className="mt-10">

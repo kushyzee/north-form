@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server"
 
 import { getAuthUser } from "@/lib/auth/session"
-import { handlePlaceOrder } from "@/lib/orders/handle-place-order"
+import { notifyOrderPlaced } from "@/lib/email/notify-order-placed"
+import { sendOrderConfirmationEmail } from "@/lib/email/send-order-confirmation"
+import { handlePlaceOrder, type OrderSuccessBody } from "@/lib/orders/handle-place-order"
 import { placeOrder } from "@/lib/orders/place-order"
+import { getOrderByNumber } from "@/lib/orders/queries"
 
 /**
  * `POST /api/orders` — place an order for the signed-in customer.
@@ -18,6 +21,9 @@ import { placeOrder } from "@/lib/orders/place-order"
  * `getAuthUser()` verifies the access token; a browser-supplied user id is never
  * read, and the order's owner is decided by `auth.uid()` inside the database.
  */
+
+/** How long the confirmation email may hold up the response. */
+const EMAIL_TIMEOUT_MS = 8000
 
 /** Anything other than POST is not part of this API. */
 export async function GET() {
@@ -39,6 +45,25 @@ export async function POST(request: Request) {
     userId: user?.id ?? null,
     placeOrder,
   })
+
+  // The order is committed by the time we are here. The confirmation email is
+  // secondary: it is awaited rather than left dangling (a fire-and-forget
+  // promise is liable to be killed when the response is sent), but it is
+  // bounded and it cannot change the status or the body below. A customer whose
+  // email bounced still has a real order.
+  if (result.status === 201) {
+    const order = result.body as OrderSuccessBody
+    await notifyOrderPlaced({
+      orderNumber: order.orderNumber,
+      // Re-read through the caller's own RLS-scoped session rather than
+      // assembling the email from the order the RPC just returned: the email
+      // needs the line items and the delivery snapshot, and the database is the
+      // only source that has them.
+      loadOrder: getOrderByNumber,
+      sendEmail: (details) =>
+        sendOrderConfirmationEmail(details, EMAIL_TIMEOUT_MS),
+    })
+  }
 
   return NextResponse.json(result.body, { status: result.status })
 }
