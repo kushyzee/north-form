@@ -7,16 +7,19 @@ current as the project evolves.
 
 ## Project status
 
-**Phases 1–4 are complete.** The scaffold, the Supabase client foundation and
+**Phases 1–5A are complete.** The scaffold, the Supabase client foundation and
 the database schema/RLS/demo catalogue are in place, the customer-facing
 storefront (homepage, shop with filter/search/sort, product detail, cart) is
-built on top of the public catalogue, and Google sign-in via Supabase Auth is
-working end to end.
+built on top of the public catalogue, Google sign-in via Supabase Auth is
+working end to end, and `/checkout` is a protected, validated checkout form.
 
 Deliberately **not** built yet — do not assume any of this exists:
 
-- Checkout submission, order creation, bank transfer flow
+- **Order creation.** `/checkout` collects and validates details and shows
+  totals, but submitting it creates nothing (see "Checkout (Phase 5A)")
+- Bank transfer flow / payment instructions
 - Mailgun integration
+- Order confirmation page
 - Account area / order history (only sign-in, sign-out and a header state exist)
 - Admin functionality
 - Payment verification
@@ -34,7 +37,8 @@ Deliberately **not** built yet — do not assume any of this exists:
 | React Compiler| enabled in `next.config.ts`                | —        |
 | Backend       | Supabase (Postgres + Auth)                 | —        |
 | Email         | Mailgun (transactional, order confirmations)| —        |
-| Forms         | React Hook Form + Zod                      | not yet installed |
+| Forms         | React Hook Form + Zod + `@hookform/resolvers` | ^7.89 / ^4.6 / ^5.9 |
+| Testing       | Vitest (Node environment, no DOM)           | ^5.0.3   |
 
 Package manager is **pnpm** (`packageManager: pnpm@12.6.0`).
 
@@ -69,6 +73,7 @@ components/ui/        shadcn/ui primitives (generated via shadcn CLI)
 components/storefront/  Site shell and catalogue presentation (mostly RSC)
 components/cart/        Cart provider + cart UI (client)
 components/auth/        Sign-in page pieces, header auth state, sign-out
+components/checkout/    Checkout form, order summary, field wrapper (client)
 lib/utils.ts          cn() re-export (shadcn convention)
 lib/format.ts         NGN / stock / item-count formatting
 lib/auth/
@@ -80,6 +85,12 @@ lib/catalogue/
 lib/cart/
   reducer.ts          Pure cart reducer + selectors (no React)
   storage.ts          localStorage adapter with validation
+lib/checkout/
+  nigeria-states.ts   Canonical 36 states + FCT, type, narrowing guard
+  delivery.ts         Display-only delivery fee + region mapping
+  phone.ts            Nigerian phone normalisation/validation
+  schema.ts           Zod contract shared by the form and (later) the server
+  profile.ts          Server-only own-row profile read (pre-fill defaults only)
 lib/supabase/
   client.ts           Browser client — Client Components
   server.ts           Server client — Server Components/Actions/Route Handlers
@@ -124,8 +135,56 @@ Decisions worth knowing before changing anything here:
   lands — do not widen it to a wildcard.
 - **Availability is never colour-only.** Cards and the product page state
   "Sold out" / "Low stock" / "N in stock" in text as well as styling.
-- React Hook Form and Zod are still **not** installed and are not needed yet —
-  search, quantity and cart are plain UI state. They arrive with checkout.
+- React Hook Form and Zod are installed and used **only by the checkout form**.
+  Search, quantity and cart remain plain UI state; do not migrate them.
+
+## Checkout (Phase 5A)
+
+`/checkout` is the first route to opt into the auth guard. It collects customer
+and delivery details, validates them, and shows the cart and totals. **It does
+not create an order.**
+
+| File                            | Role |
+| -------------------------------- | ---- |
+| `app/checkout/page.tsx`          | RSC. `requireAuthUser("/checkout")`, reads the profile, renders the chrome |
+| `components/checkout/checkout-view.tsx` | Client. Hydration gate, empty-cart state, skeleton |
+| `components/checkout/checkout-form.tsx`  | Client. RHF + Zod form, order summary wiring, submit boundary |
+| `components/checkout/checkout-field.tsx` | Label / error / hint wrapper shared by all fields |
+| `components/checkout/order-summary.tsx`   | Presentational lines + Subtotal / Delivery / Total |
+
+Decisions worth knowing before changing anything here:
+
+- **The guard is `requireAuthUser()` in the page, nothing else.** `proxy.ts`
+  still only refreshes the session. There is no proxy-level route protection and
+  no second auth mechanism.
+- **Do not add `app/checkout/loading.tsx`.** This is not a style preference: a
+  route `loading.tsx` wraps the page in a Suspense boundary that flushes before
+  the page body runs, so `redirect()` becomes a `200` carrying a meta-refresh
+  instead of a real `307`. Verified — with the file the guard degrades to
+  `200`; without it, `/checkout` returns `307 → /auth?next=%2Fcheckout`. The
+  loading state is the client-side skeleton in `checkout-view.tsx`, exactly as
+  `/cart` does it.
+- **The submit button is a placeholder boundary.** `onSubmit` runs full
+  validation and then does no network or database work, showing an explicit
+  "no order was created" message in an `aria-live` region. It must not clear
+  the cart, navigate, or claim success. Phase 5B replaces it.
+- **Every total is display-only.** `subtotal` comes from the cart's add-time
+  snapshot and `deliveryFee` from `getDeliveryFee()`. Phase 5B recomputes both
+  server-side. Nothing here is ever submitted.
+- **One schema, two consumers.** `lib/checkout/schema.ts` is the single Zod
+  contract, used by the browser form now and by the server-side order path
+  later. `state` is `z.enum(NIGERIAN_STATES)`, so an unknown state is rejected
+  rather than stored as free text.
+- **Profile is read, never written.** `lib/checkout/profile.ts` returns
+  defaults for `fullName` / `email` / `phone` and nothing more. Profile
+  persistence is out of scope, and the auth trigger still owns row creation.
+- **`getDeliveryRegion()` uses a `switch`, not an object lookup.** The state
+  value is user-controlled, and indexing a plain object with an arbitrary
+  string returns whatever is inherited from `Object.prototype`.
+- **Validation runs in `onTouched` mode** so nothing is flagged mid-typing, and
+  `useWatch` (not `watch()`) subscribes the summary to the state field — the
+  React Compiler treats RHF's `watch()` as an incompatible library and skips
+  memoizing the component.
 
 ## Supabase foundation
 
@@ -193,8 +252,10 @@ never construct a redirect or an `href` from a raw query value.
 - Server-side identity is `getAuthUser()` in `lib/auth/session.ts` (server-only),
   built on `getClaims()`. The `id` it returns is the `sub` of a verified token —
   never a client-supplied user id.
-- `requireAuthUser(nextPath)` is the Phase 5 guard for `/checkout`. It protects a
-  *route*; RLS still protects the *data*. It is currently unused.
+- `requireAuthUser(nextPath)` protects `/checkout`. It protects a *route*; RLS
+  still protects the *data*. It is used from `app/checkout/page.tsx` only — see
+  "Checkout (Phase 5A)" for why the guard is not duplicated in `proxy.ts` or
+  moved into a layout.
 - The header's auth state is a Server Component (`components/auth/auth-status.tsx`)
   passed into the client `SiteHeader` as `children`. It renders "Sign in" when
   anonymous, and the email plus a sign-out control when signed in. Sign-out uses
@@ -435,9 +496,15 @@ Run before considering work done:
 ```bash
 pnpm lint
 pnpm typecheck
+pnpm test
 pnpm build
 pnpm dev                # confirm the app still starts
 ```
+
+`pnpm test` runs Vitest over the pure checkout logic (delivery fees and the Zod
+contract) in a Node environment — no DOM, no browser, no jsdom. Component
+rendering and responsive layout are not covered by it and must be checked by
+hand.
 
 Database changes additionally require re-running
 `supabase/tests/verify_phase2.sql` (see the Database section).
