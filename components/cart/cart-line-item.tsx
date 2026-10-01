@@ -1,26 +1,27 @@
-"use client"
+"use client";
 
-import Image from "next/image"
-import Link from "next/link"
-import { Minus, Plus, Trash2 } from "lucide-react"
+import Image from "next/image";
+import Link from "next/link";
+import { Minus, Plus, Trash2 } from "lucide-react";
 
-import { useCart } from "@/components/cart/cart-provider"
-import { Button } from "@/components/ui/button"
-import { formatNaira } from "@/lib/format"
+import { useCart } from "@/components/cart/cart-provider";
+import { Button } from "@/components/ui/button";
+import { formatNaira } from "@/lib/format";
 
 /**
  * One cart line. Client Component because every control mutates local cart
  * state — the authoritative price and stock come from the database at checkout.
  */
 export function CartLineItem({ lineId }: { lineId: string }) {
-  const { items, incrementItem, decrementItem, setQuantity, removeItem } = useCart()
-  const item = items.find((entry) => entry.lineId === lineId)
+  const { items, incrementItem, decrementItem, setQuantity, removeItem } =
+    useCart();
+  const item = items.find((entry) => entry.lineId === lineId);
 
-  if (!item) return null
+  if (!item) return null;
 
-  const lineTotal = item.unitPrice * item.quantity
-  const atMaxQuantity = item.quantity >= item.maxQuantity
-  const atMinQuantity = item.quantity <= 1
+  const lineTotal = item.unitPrice * item.quantity;
+  const atMaxQuantity = item.quantity >= item.maxQuantity;
+  const atMinQuantity = item.quantity <= 1;
 
   return (
     <li className="flex gap-4 py-6 sm:gap-6">
@@ -97,8 +98,8 @@ export function CartLineItem({ lineId }: { lineId: string }) {
               max={item.maxQuantity}
               value={item.quantity}
               onChange={(event) => {
-                const next = Number.parseInt(event.target.value, 10)
-                if (Number.isFinite(next)) setQuantity(item.lineId, next)
+                const next = Number.parseInt(event.target.value, 10);
+                if (Number.isFinite(next)) setQuantity(item.lineId, next);
               }}
               aria-label={`Quantity of ${item.productName}${
                 item.size ? `, size ${item.size}` : ""
@@ -145,8 +146,7 @@ export function CartLineItem({ lineId }: { lineId: string }) {
             Maximum available quantity reached.
           </p>
         ) : null}
-
-        </div>
+      </div>
     </li>
-  )
+  );
 }

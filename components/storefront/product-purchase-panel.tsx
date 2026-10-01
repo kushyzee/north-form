@@ -1,13 +1,13 @@
-"use client"
+"use client";
 
-import { Minus, Plus, ShoppingBag } from "lucide-react"
-import { useState } from "react"
+import { Minus, Plus, ShoppingBag } from "lucide-react";
+import { useState } from "react";
 
-import { useCart } from "@/components/cart/cart-provider"
-import { Button } from "@/components/ui/button"
-import { getAvailability, type Product } from "@/lib/catalogue/types"
-import { clampQuantity } from "@/lib/cart/reducer"
-import { cn } from "@/lib/utils"
+import { useCart } from "@/components/cart/cart-provider";
+import { Button } from "@/components/ui/button";
+import { getAvailability, type Product } from "@/lib/catalogue/types";
+import { clampQuantity } from "@/lib/cart/reducer";
+import { cn } from "@/lib/utils";
 
 /**
  * Size / quantity / add-to-bag controls for a product detail page.
@@ -20,28 +20,28 @@ import { cn } from "@/lib/utils"
  * These are UX constraints only. The server re-checks stock during checkout.
  */
 export function ProductPurchasePanel({ product }: { product: Product }) {
-  const { addItem } = useCart()
+  const { addItem } = useCart();
 
-  const hasSizes = product.sizes.length > 0
-  const [selectedSize, setSelectedSize] = useState<string | null>(null)
-  const [quantity, setQuantity] = useState(1)
-  const [error, setError] = useState<string | null>(null)
-  const [justAdded, setJustAdded] = useState(false)
+  const hasSizes = product.sizes.length > 0;
+  const [selectedSize, setSelectedSize] = useState<string | null>(null);
+  const [quantity, setQuantity] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [justAdded, setJustAdded] = useState(false);
 
-  const availability = getAvailability(product.stockQuantity)
-  const outOfStock = availability === "out_of_stock"
-  const maxQuantity = Math.max(product.stockQuantity, 1)
+  const availability = getAvailability(product.stockQuantity);
+  const outOfStock = availability === "out_of_stock";
+  const maxQuantity = Math.max(product.stockQuantity, 1);
 
   function handleAddToBag() {
-    if (outOfStock) return
+    if (outOfStock) return;
 
     // Required size not chosen — tell the user instead of silently doing nothing.
     if (hasSizes && !selectedSize) {
-      setError("Choose a size to continue.")
-      return
+      setError("Choose a size to continue.");
+      return;
     }
 
-    setError(null)
+    setError(null);
     addItem(
       {
         productId: product.id,
@@ -54,13 +54,13 @@ export function ProductPurchasePanel({ product }: { product: Product }) {
         maxQuantity: product.stockQuantity,
       },
       quantity,
-    )
+    );
 
-    setJustAdded(true)
+    setJustAdded(true);
     // Reset the confirmation so adding again re-announces it.
-    window.setTimeout(() => setJustAdded(false), 3000)
+    window.setTimeout(() => setJustAdded(false), 3000);
   }
-return (
+  return (
     <div className="flex flex-col gap-6">
       {/* Size */}
       {hasSizes ? (
@@ -73,7 +73,7 @@ return (
           </legend>
           <div className="mt-3 flex flex-wrap gap-2">
             {product.sizes.map((size) => {
-              const active = selectedSize === size
+              const active = selectedSize === size;
               return (
                 <label
                   key={size}
@@ -91,23 +91,26 @@ return (
                     value={size}
                     checked={active}
                     onChange={() => {
-                      setSelectedSize(size)
-                      setError(null)
+                      setSelectedSize(size);
+                      setError(null);
                     }}
                     className="sr-only"
                   />
                   {size}
                 </label>
-              )
+              );
             })}
           </div>
         </fieldset>
       ) : null}
 
       {/* Quantity + Add to bag */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-end">
         <div>
-          <span id={`quantity-label-${product.id}`} className="text-sm font-medium">
+          <span
+            id={`quantity-label-${product.id}`}
+            className="text-sm font-medium"
+          >
             Quantity
           </span>
           <div className="mt-3 flex h-11 items-center rounded-md border border-border">
@@ -115,8 +118,10 @@ return (
               type="button"
               variant="ghost"
               size="icon"
-              className="h-11 w-11 rounded-none rounded-l-md"
-              onClick={() => setQuantity((c) => clampQuantity(c - 1, maxQuantity))}
+              className="h-11 sm:w-11 rounded-none rounded-l-md"
+              onClick={() =>
+                setQuantity((c) => clampQuantity(c - 1, maxQuantity))
+              }
               disabled={outOfStock || quantity <= 1}
             >
               <Minus aria-hidden="true" />
@@ -135,8 +140,10 @@ return (
               type="button"
               variant="ghost"
               size="icon"
-              className="h-11 w-11 rounded-none rounded-r-md"
-              onClick={() => setQuantity((c) => clampQuantity(c + 1, maxQuantity))}
+              className="h-11 sm:w-11 rounded-none rounded-r-md"
+              onClick={() =>
+                setQuantity((c) => clampQuantity(c + 1, maxQuantity))
+              }
               disabled={outOfStock || quantity >= product.stockQuantity}
             >
               <Plus aria-hidden="true" />
@@ -150,7 +157,7 @@ return (
           size="lg"
           onClick={handleAddToBag}
           disabled={outOfStock}
-          className="h-12 flex-1 sm:flex-none sm:px-10"
+          className="h-12 w-full sm:w-fit sm:px-10"
         >
           <ShoppingBag aria-hidden="true" />
           {outOfStock ? "Out of stock" : "Add to bag"}
@@ -183,5 +190,5 @@ return (
         ) : null}
       </p>
     </div>
-  )
+  );
 }
