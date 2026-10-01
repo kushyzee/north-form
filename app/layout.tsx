@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist_Mono, Instrument_Serif, Inter } from "next/font/google";
 
+import { AuthStatus } from "@/components/auth/auth-status";
 import { CartProvider } from "@/components/cart/cart-provider";
 import { SiteFooter } from "@/components/storefront/site-footer";
 import { SiteHeader } from "@/components/storefront/site-header";
@@ -50,7 +51,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           >
             Skip to content
           </a>
-          <SiteHeader />
+          {/* AuthStatus is a Server Component; passing it as children keeps
+              SiteHeader a Client Component for the cart and mobile menu. */}
+          <SiteHeader>
+            <AuthStatus />
+          </SiteHeader>
           <main id="main" className="flex-1">
             {children}
           </main>

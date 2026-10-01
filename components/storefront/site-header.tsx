@@ -1,5 +1,6 @@
 "use client"
 
+import type { ReactNode } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Menu, ShoppingBag } from "lucide-react"
@@ -26,8 +27,12 @@ const NAV_LINKS = [
  *
  * Client-side because it reads the live cart count and owns the mobile
  * navigation dialog. The brand wordmark and links themselves are static.
+ *
+ * `children` is rendered in the actions cluster and is how the server-rendered
+ * `AuthStatus` reaches the header without this component having to become an
+ * async Server Component. It stays a plain presentational node with no props.
  */
-export function SiteHeader() {
+export function SiteHeader({ children }: { children?: ReactNode }) {
   const pathname = usePathname()
   const { count, hydrated } = useCart()
 
@@ -68,6 +73,9 @@ export function SiteHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-1 md:ml-0">
+          {/* Server-rendered sign-in state (see components/auth/auth-status.tsx). */}
+          {children}
+
           {/* Navigation target, so it renders a real <a> and only borrows the
             button's styling. `render={<Link />}` on <Button> would make Base
             UI emit an anchor where it expects a native button. */}

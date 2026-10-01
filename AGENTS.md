@@ -7,20 +7,19 @@ current as the project evolves.
 
 ## Project status
 
-**Phases 1–3 are complete.** The scaffold, the Supabase client foundation and
-the database schema/RLS/demo catalogue are in place, and the customer-facing
+**Phases 1–4 are complete.** The scaffold, the Supabase client foundation and
+the database schema/RLS/demo catalogue are in place, the customer-facing
 storefront (homepage, shop with filter/search/sort, product detail, cart) is
-built on top of the public catalogue.
+built on top of the public catalogue, and Google sign-in via Supabase Auth is
+working end to end.
 
 Deliberately **not** built yet — do not assume any of this exists:
 
 - Checkout submission, order creation, bank transfer flow
-- Google OAuth configuration (Supabase + Google Cloud Console)
 - Mailgun integration
-- Authentication UI / account area
+- Account area / order history (only sign-in, sign-out and a header state exist)
 - Admin functionality
 - Payment verification
-- Customer order history
 
 ## Stack (as scaffolded — do not churn)
 
@@ -69,8 +68,12 @@ app/                  App Router routes, layout, global CSS
 components/ui/        shadcn/ui primitives (generated via shadcn CLI)
 components/storefront/  Site shell and catalogue presentation (mostly RSC)
 components/cart/        Cart provider + cart UI (client)
+components/auth/        Sign-in page pieces, header auth state, sign-out
 lib/utils.ts          cn() re-export (shadcn convention)
 lib/format.ts         NGN / stock / item-count formatting
+lib/auth/
+  redirect.ts         safeRedirectPath() — the only open-redirect guard
+  session.ts          Server-only identity helpers (getAuthUser / requireAuthUser)
 lib/catalogue/
   types.ts            Domain types + stock availability helpers
   queries.ts          Server-only catalogue reads (RLS-constrained)
@@ -145,6 +148,99 @@ Rules:
   re-validated.
 - Server Components cannot write cookies; `proxy.ts` performs the refresh.
 
+## Authentication (Phase 4 — Google OAuth)
+
+```
+/auth  →  "Continue with Google"  →  Supabase Auth  →  Google  →
+/auth/callback  →  exchangeCodeForSession  →  session cookies  →  next
+```
+
+Google is the **only** provider. There is no email/password, magic link, phone
+or other social login, and no custom OAuth flow — Supabase owns the protocol.
+
+### Routes
+
+| Route                   | Kind             | Purpose |
+| ----------------------- | ---------------- | ------- |
+| `/auth`                 | RSC + client btn | The sign-in page. Reads `?next=` and `?error=` |
+| `/auth/callback`        | Route Handler    | Exchanges the authorization code for a session |
+
+`components/auth/google-sign-in-button.tsx` calls
+`signInWithOAuth({ provider: "google", options: { redirectTo } })` on the
+**browser** client. `redirectTo` is built from `window.location.origin`, so the
+same code works on localhost, a preview URL and production — there is no
+hardcoded host and no separate callback per environment.
+
+`app/auth/callback/route.ts` calls `exchangeCodeForSession(code)` with the
+**server** client. A Route Handler may write outgoing cookies, so the session
+cookies Supabase sets ride along on the `NextResponse.redirect` — do **not**
+copy, read or delete auth cookies by hand. The access and refresh tokens never
+reach client JavaScript; the browser only ends up holding Supabase's cookies.
+
+### Redirects — the one rule
+
+`next` travels in a query string, so it is attacker-controlled. **Every** use
+goes through `safeRedirectPath()` in `lib/auth/redirect.ts`, which accepts only
+a single-slash absolute path and rejects `//evil.example`, `/\evil.example`,
+control characters and anything that resolves off-origin, defaulting to `/`.
+Supabase's own redirect allow-list is a second layer, not the primary guard —
+never construct a redirect or an `href` from a raw query value.
+
+### Session and identity
+
+- `proxy.ts` still owns session refresh. There is no second mechanism, and no
+  second middleware. The callback does not duplicate it.
+- Server-side identity is `getAuthUser()` in `lib/auth/session.ts` (server-only),
+  built on `getClaims()`. The `id` it returns is the `sub` of a verified token —
+  never a client-supplied user id.
+- `requireAuthUser(nextPath)` is the Phase 5 guard for `/checkout`. It protects a
+  *route*; RLS still protects the *data*. It is currently unused.
+- The header's auth state is a Server Component (`components/auth/auth-status.tsx`)
+  passed into the client `SiteHeader` as `children`. It renders "Sign in" when
+  anonymous, and the email plus a sign-out control when signed in. Sign-out uses
+  the browser client's `signOut()` then `router.refresh()`; Supabase clears the
+  cookies itself.
+- `/`, `/shop`, `/shop/[slug]` and `/cart` stay public. Auth is required only
+  where a route opts in via `requireAuthUser`. Do not add blanket route
+  protection — it would make the storefront private.
+
+### Configuration (dashboard only — never in the repo)
+
+Already configured for this project (project ref `gtgovpkjbqoxdgmwbwny`):
+
+- **Google Cloud** → Google Auth Platform. An *OAuth client* of type **Web
+  application** exists with client id
+  `154939204905-99tj4495jacv7edjoih1ibf25skea3iu.apps.googleusercontent.com`.
+  Authorized redirect URI is Supabase's callback, **not** our app:
+  `https://gtgovpkjbqoxdgmwbwny.supabase.co/auth/v1/callback`.
+  Authorized JavaScript origins: `http://localhost:3000` (+ the production
+  origin). Audience must include the testers' accounts; Data Access scopes are
+  `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`.
+- **Supabase** → Authentication → Providers → Google: enabled, with the client
+  id and client secret stored in the dashboard.
+- **Supabase** → Authentication → URL Configuration: Site URL = the production
+  origin; Redirect URLs include `http://localhost:3000/**` and the production
+  origin. The wildcard matters because the callback carries `?next=`, which an
+  exact-path entry would not match.
+
+> The Google client secret and the Supabase service-role/secret key live only in
+> the Supabase dashboard and `.env.local`. Never commit either, never add a
+> `NEXT_PUBLIC_` prefix to either, and never log a token.
+
+To reproduce this from scratch for a new project: create the Google Cloud OAuth
+client as above, paste its id/secret into Supabase → Providers → Google, then
+allow-list the origins and redirect URLs in Supabase → URL Configuration. No
+application code or environment variable changes.
+
+### Profile creation
+
+The Phase 2 `handle_new_user()` trigger is unchanged and does all the work:
+`on_auth_user_created` fires once per new `auth.users` row and inserts into
+`public.profiles`, taking `full_name` (then `name`) from the OAuth identity,
+falling back to the email local part, with `on conflict (id) do nothing` so
+repeat sign-ins never create a second row. **Do not add a client-side profile
+insert path**, and do not add an insert policy on `profiles`.
+
 ## Environment variables
 
 Copy `.env.example` to `.env.local` and fill in real values. **`.env.local` is
@@ -154,6 +250,13 @@ gitignored — never commit real credentials.**
   expose; RLS is the actual security boundary.
 - `MAILGUN_*` — **server-side only.** Never add a `NEXT_PUBLIC_` prefix to
   these, and only read them from Server Components/Actions/Route Handlers.
+- `SUPABASE_SECRET_KEY` — server-side only. Not used by Phase 4 auth (the
+  callback exchanges codes with the publishable key); it is there for the
+  server-side order-creation path in Phase 5.
+
+**Google OAuth adds no environment variables.** The client secret stays in the
+Supabase dashboard, and the redirect origin is derived at runtime from
+`window.location.origin` / `request.nextUrl.origin`.
 
 ## Database (Phase 2 — applied and verified)
 
@@ -338,6 +441,25 @@ pnpm dev                # confirm the app still starts
 
 Database changes additionally require re-running
 `supabase/tests/verify_phase2.sql` (see the Database section).
+
+### Verifying authentication
+
+Auth cannot be proven by types and a build. A real Google sign-in needs a
+browser, an interactive Google account, and the dashboard config. When checking
+it by hand: open `/auth`, click **Continue with Google**, complete consent, and
+confirm the header switches to the signed-in state; then confirm `auth.users`
+gained exactly one row and `public.profiles` exactly one row with
+`profiles.id = auth.users.id`.
+
+Two behaviours worth remembering when testing:
+
+- `signInWithOAuth` builds the PKCE URL client-side, so the browser leaves for
+  Google within milliseconds and the button's pending/disabled state is rarely
+  painted. That is expected, not a bug — the guard that matters is that repeated
+  clicks still produce a single authorize request.
+- Callback errors (`?error=`) are the way to exercise the failure paths without a
+  real provider: `?error=access_denied` renders the "cancelled" copy, and a bogus
+  `?code=` renders the "couldn't complete" copy.
 
 ## Conventions
 
