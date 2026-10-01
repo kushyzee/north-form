@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { Controller, useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { LoaderCircle } from "lucide-react"
@@ -37,24 +38,57 @@ import { checkoutSchema, type CheckoutFormValues } from "@/lib/checkout/schema"
  * first time. A failed submit moves focus to the first invalid field, and every
  * message is associated with its control and announced.
  *
- * NOTHING IS SUBMITTED. See `onSubmit`.
+ * Submitting calls `POST /api/orders`. The summary above is a preview — the
+ * order is priced and created by the database, and the confirmation page reads
+ * that order back rather than trusting anything rendered here.
  */
 
-/** Shown after a valid submit, while order creation does not exist yet. */
-const NOT_YET_ENABLED =
-  "Your details are valid. Order placement is not enabled yet — no order was created and nothing has been charged."
-
-/** Always visible under the button, so the limit is never a surprise. */
+/** Always visible under the button, so the next step is never a surprise. */
 const SUBMIT_CAPTION =
-  "Order placement is not enabled in this release. Submitting does not create an order."
+  "We will ask you to transfer the total by bank transfer once your order is confirmed."
+
+/**
+ * Fallback copy when the API answers without a message we can show. The API
+ * only ever sends messages written for customers, so this is a last resort.
+ */
+function readApiError(payload: unknown, status: number): string {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "error" in payload
+  ) {
+    const { error } = payload as { error?: { message?: unknown } }
+    if (typeof error?.message === "string" && error.message.length > 0) {
+      return error.message
+    }
+  }
+
+  return status >= 500
+    ? "Something went wrong on our side. Your order was not created — please try again."
+    : "We could not place that order. Please check your details and try again."
+}
 
 export function CheckoutForm({
   profile,
+  onOrderPlaced,
 }: {
   profile: CheckoutProfileDefaults | null
+  /** Called only after the API confirms the order was created. */
+  onOrderPlaced: (orderNumber: string) => void
 }) {
   const { items, subtotal } = useCart()
-  const [notice, setNotice] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Guards a second submit that never touches the button: pressing Enter in a
+  // field fires `submit` again, and React Hook Form does not serialise handlers
+  // itself. `isSubmitting` alone cannot close this either, because the button is
+  // not the only way to submit a form.
+  //
+  // State rather than a ref: two Enter presses are two separate DOM events, so
+  // React has already flushed this before the second one runs. A ref would also
+  // have to be read inside a handler that the compiler cannot prove is event
+  // code.
+  const [inFlight, setInFlight] = useState(false)
 
   const {
     register,
@@ -90,23 +124,71 @@ export function CheckoutForm({
   const deliveryRegion = selectedState ? getDeliveryRegion(selectedState) : null
 
   /**
-   * PHASE 5A PLACEHOLDER — this creates no order.
+   * PHASE 5B-2 — places a real order.
    *
-   * Phase 5B replaces this function with the trusted server-side order-creation
-   * call, which re-reads products, prices and stock, recomputes the delivery
-   * fee from the validated state, and writes the order itself. That path must
-   * never trust the values collected here: `subtotal`, `deliveryFee` and the
-   * cart's `unitPrice` snapshots are display-only.
+   * The browser sends only what the customer typed plus the cart lines. It does
+   * not send, and the API does not accept, any price, subtotal, fee, total,
+   * status or user id: `POST /api/orders` answers `201` only after
+   * `private.place_order` has created the order server-side.
    *
-   * Until then this deliberately does no network or database work. It does not
-   * clear the cart, does not navigate, and does not claim an order exists —
-   * there is nothing to persist, so a "success" message would be a lie. The
-   * work is async so the pending state below is real, even though there is no
-   * request to wait for yet.
+   * Nothing here is treated as a result until that response arrives. The
+   * summary numbers the customer has been looking at are the cart's add-time
+   * snapshots; the order that was actually created is described by the
+   * database's own totals, which is why the confirmation is a separate page
+   * that re-reads the order instead of echoing this form.
    */
-  async function onSubmit() {
-    setNotice(NOT_YET_ENABLED)
+  async function onSubmit(values: CheckoutFormValues) {
+    if (inFlight) return
+    setInFlight(true)
+
+    setError(null)
+
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...values,
+          cart: items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            size: item.size,
+          })),
+        }),
+      })
+
+      const payload: unknown = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        // A mapped business failure carries a message written for customers;
+        // anything else gets a generic line, because the API never forwards a
+        // raw database error.
+        setError(readApiError(payload, response.status))
+        return
+      }
+
+      const placed = payload as { orderNumber?: unknown } | null
+      if (typeof placed?.orderNumber !== "string") {
+        setError(
+          "Your order may not have gone through. Please check with us before trying again.",
+        )
+        return
+      }
+
+      onOrderPlaced(placed.orderNumber)
+    } catch {
+      // Offline, DNS failure, aborted request — the order may or may not have
+      // reached us, so the copy asks the customer to check rather than claiming
+      // either outcome.
+      setError(
+        "We could not reach the server. Check your connection and try again — if you do, we may have to cancel one of the orders.",
+      )
+    } finally {
+      setInFlight(false)
+    }
   }
+
+  const busy = isSubmitting || inFlight
 
   return (
     <form
@@ -281,28 +363,42 @@ export function CheckoutForm({
           <Button
             type="submit"
             size="lg"
-            disabled={isSubmitting}
-            aria-busy={isSubmitting}
+            disabled={busy}
+            aria-busy={busy}
             className="h-12 w-full sm:w-auto sm:px-10"
           >
-            {isSubmitting ? (
+            {busy ? (
               <LoaderCircle aria-hidden="true" className="animate-spin" />
             ) : null}
-            {isSubmitting ? "Checking your details…" : "Place order"}
+            {busy ? "Placing your order…" : "Place order"}
           </Button>
 
           <p className="mt-3 max-w-md text-xs leading-relaxed text-muted-foreground">
             {SUBMIT_CAPTION}
           </p>
 
-          {/* Always rendered so the region is registered before it has content. */}
+          {/* An order-level failure is not tied to one field, so it lives in a
+              status region rather than beside an input. Always rendered so the
+              region is registered before it has content. */}
           <p
             role="status"
             aria-live="polite"
-            className="mt-3 max-w-md min-h-5 text-sm leading-relaxed text-muted-foreground"
+            className="mt-4 max-w-md min-h-5 text-sm leading-relaxed"
           >
-            {notice}
+            {error ? <span className="text-destructive">{error}</span> : null}
           </p>
+
+          {error ? (
+            <p className="mt-2 max-w-md text-sm">
+              <Link
+                href="/cart"
+                className="underline underline-offset-4 hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Review your bag
+              </Link>{" "}
+              <span className="text-muted-foreground">to change what you ordered.</span>
+            </p>
+          ) : null}
         </div>
       </div>
 

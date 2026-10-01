@@ -1,5 +1,7 @@
 "use client"
 
+import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { ShoppingBag } from "lucide-react"
 
 import { useCart } from "@/components/cart/cart-provider"
@@ -19,6 +21,12 @@ import type { CheckoutProfileDefaults } from "@/lib/checkout/profile"
  *
  * An empty cart never reaches the form at all, so there is nothing to submit
  * and no "place order" button to submit it with.
+ *
+ * After a successful order the cart is emptied and the customer is sent to the
+ * confirmation page. `placed` exists purely for that hand-off: clearing the cart
+ * would otherwise flip this component to its empty-cart branch for the few
+ * hundred milliseconds the redirect takes, showing "nothing to check out" right
+ * after an order was placed. Rendering the skeleton keeps the transition quiet.
  */
 
 /** Placeholder matching the real form's two-column shape. */
@@ -47,7 +55,13 @@ export function CheckoutView({
 }: {
   profile: CheckoutProfileDefaults | null
 }) {
-  const { items, hydrated } = useCart()
+  const { items, hydrated, clearCart } = useCart()
+  const router = useRouter()
+  const [placed, setPlaced] = useState(false)
+
+  // Checked before the empty-cart branch, so clearing the cart below does not
+  // flash the empty state during the redirect.
+  if (placed) return <CheckoutSkeleton />
 
   if (!hydrated) return <CheckoutSkeleton />
 
@@ -62,5 +76,17 @@ export function CheckoutView({
     )
   }
 
-  return <CheckoutForm profile={profile} />
+  return (
+    <CheckoutForm
+      profile={profile}
+      onOrderPlaced={(orderNumber) => {
+        // The order now lives in the database, so the browser's copy of that
+        // intent is spent and can go. The confirmation page re-reads the order
+        // from the database rather than trusting anything from this form.
+        clearCart()
+        setPlaced(true)
+        router.replace(`/checkout/confirmation/${encodeURIComponent(orderNumber)}`)
+      }}
+    />
+  )
 }

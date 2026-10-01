@@ -7,25 +7,22 @@ current as the project evolves.
 
 ## Project status
 
-**Phases 1–5B-1 are complete.** The scaffold, the Supabase client foundation
+**Phases 1–5B-2 are complete.** The scaffold, the Supabase client foundation
 and the database schema/RLS/demo catalogue are in place, the customer-facing
 storefront (homepage, shop with filter/search/sort, product detail, cart) is
 built on top of the public catalogue, Google sign-in via Supabase Auth is
-working end to end, `/checkout` is a protected, validated checkout form, and the
-trusted `private.place_order()` function is the database-side order-creation
-boundary.
+working end to end, `/checkout` is a protected, validated checkout form, and
+`POST /api/orders` calls the trusted `private.place_order()` function, which is
+the database-side order-creation boundary.
 
 Deliberately **not** built yet — do not assume any of this exists:
 
-- **Order creation from the app.** The database function exists and is
-  verified, but nothing calls it yet: `/checkout` still creates nothing (see
-  "Checkout (Phase 5A)"). Phase 5B-2 wires the server up to it.
-- Bank transfer flow / payment instructions
+- **Payment verification.** An order is created `awaiting_payment` and nothing
+  ever moves it on — no webhook, no admin action (see "Checkout (Phase 5A)")
+- Bank transfer flow / payment instructions beyond the confirmation copy
 - Mailgun integration
-- Order confirmation page
-- Account area / order history (only sign-in, sign-out and a header state exist)
+- Account area / order history — the confirmation page is the only order page
 - Admin functionality
-- Payment verification
 - Stock decrement or reservation
 
 ## Stack (as scaffolded — do not churn)
@@ -78,6 +75,7 @@ components/storefront/  Site shell and catalogue presentation (mostly RSC)
 components/cart/        Cart provider + cart UI (client)
 components/auth/        Sign-in page pieces, header auth state, sign-out
 components/checkout/    Checkout form, order summary, field wrapper (client)
+app/api/orders/         POST /api/orders — the order-creation API route
 lib/utils.ts          cn() re-export (shadcn convention)
 lib/format.ts         NGN / stock / item-count formatting
 lib/auth/
@@ -168,10 +166,11 @@ Decisions worth knowing before changing anything here:
   `200`; without it, `/checkout` returns `307 → /auth?next=%2Fcheckout`. The
   loading state is the client-side skeleton in `checkout-view.tsx`, exactly as
   `/cart` does it.
-- **The submit button is a placeholder boundary.** `onSubmit` runs full
-  validation and then does no network or database work, showing an explicit
-  "no order was created" message in an `aria-live` region. It must not clear
-  the cart, navigate, or claim success. Phase 5B replaces it.
+- **The submit button creates a real order.** `onSubmit` posts the typed details
+  and the cart to `POST /api/orders`, which calls `private.place_order` (Phase
+  5B-2). It claims nothing until the API answers `201`, and it does not compute
+  the order — the database does. There is no client-supplied `user_id`, price,
+  subtotal, fee, total or status anywhere in the request.
 - **Every total is display-only.** `subtotal` comes from the cart's add-time
   snapshot and `deliveryFee` from `getDeliveryFee()`. Phase 5B recomputes both
   server-side. Nothing here is ever submitted.
@@ -188,7 +187,9 @@ Decisions worth knowing before changing anything here:
 - **Validation runs in `onTouched` mode** so nothing is flagged mid-typing, and
   `useWatch` (not `watch()`) subscribes the summary to the state field — the
   React Compiler treats RHF's `watch()` as an incompatible library and skips
-  memoizing the component.
+  memoizing the component. For the same reason the in-flight guard is `useState`
+  rather than a ref: the compiler rejects reading `ref.current` inside a handler
+  it cannot prove is event code.
 
 ## Order creation (Phase 5B-1 — the trusted database function)
 
@@ -263,6 +264,72 @@ rejection with an assertion that nothing was written, direct-insert denial, and
 that stock is untouched. Like `verify_phase2.sql` it is pure SQL, runs inside
 one transaction and ends in `ROLLBACK`, so it leaves nothing behind.
 
+
+## Order API (Phase 5B-2 — the thin application layer)
+
+`POST /api/orders` connects the checkout form to `private.place_order`. It is an
+**adapter, not a second implementation** — it authenticates, validates,
+forwards, and maps errors. It computes nothing.
+
+| File | Kind | Role |
+| ---- | ---- | ---- |
+| `app/api/orders/route.ts` | route | Reads the body, resolves the caller, serialises the result |
+| `lib/orders/schema.ts` | pure | `orderRequestSchema` + `toRpcParams()` |
+| `lib/orders/errors.ts` | pure | DB code → HTTP status + safe message |
+| `lib/orders/handle-place-order.ts` | pure | The whole request decision, with the RPC injected |
+| `lib/orders/place-order.ts` | server-only | The only place the app calls the function |
+| `lib/orders/queries.ts` | server-only | `getOrderByNumber()` for the confirmation page |
+
+Decisions worth knowing before changing anything here:
+
+- **The decision is separated from the effects.** `handlePlaceOrder` takes
+  `placeOrder` as an argument, so the whole request path — anonymous, malformed
+  JSON, every validation failure, every database error code — is unit tested
+  with a stub in the project's existing Node-only Vitest setup. No jsdom, no
+  mocking library. That split is the reason those three modules are *not*
+  marked `server-only`: anything imported by a test cannot be.
+- **One request contract, not two.** `orderRequestSchema` is
+  `checkoutSchema.extend({ cart })`, so the API accepts exactly what the form
+  validates. A second, looser server-side schema is how a value ends up
+  accepted in one place and rejected in the other.
+- **The schema is `strict`.** An unknown key is a `400`, not a silent strip, so
+  a forged `total`, `unit_price`, `user_id` or `status` is refused at the edge.
+- **The user id is never forwarded.** `handlePlaceOrder` uses it only to decide
+  whether to answer `401`. The order's owner is `auth.uid()` inside the
+  function, and there is no `p_user_id` parameter to pass it through.
+- **Authentication is repeated in the route.** A Route Handler is a separate
+  entry point a browser can call directly; it renders no page, so the
+  `/checkout` page guard never runs for it.
+- **Errors: `P0001` is business, everything else is a generic 500.**
+  `mapPlaceOrderError` keeps the function's own code for a `P0001` and collapses
+  any other SQLSTATE — a constraint violation, a timeout, a connection error —
+  into one message, so no PostgreSQL text can reach the customer. The table is
+  `UNAUTHENTICATED` 401, `EMPTY_CART` / `INVALID_CART` / `INVALID_CART_ITEM` /
+  `INVALID_CUSTOMER` / `INVALID_SIZE` / `INVALID_STATE` 400, `PRODUCT_NOT_FOUND`
+  404, `INSUFFICIENT_STOCK` 409, `ORDER_CREATION_FAILED` 500.
+- **Logging never includes the request.** Only the SQLSTATE and the function's
+  machine code are logged, because the arguments are the customer's name, email,
+  phone and address. A rejected request logs the *path* of the first bad field,
+  never its value.
+- **No service-role key anywhere.** The route uses the ordinary authenticated
+  server client, so the request runs as the customer under the same RLS as any
+  other. It reaches the function via `supabase.schema('private').rpc(...)`,
+  which is only routable because Phase 5B-1 added `private` to
+  `pgrst.db_schemas`.
+- **Duplicate submits are blocked in the UI, not the database.** The button is
+  disabled while in flight and `inFlight` guards a second submit that never
+  touches the button — pressing Enter in a field re-fires `submit`, and RHF does
+  not serialise handlers itself. No idempotency key was invented; the function
+  creates one order per successful call, and that is the documented behaviour.
+- **The cart is cleared on success, and the confirmation page re-reads the
+  order.** `CheckoutView` holds a `placed` flag purely so clearing the cart does
+  not flash the empty state during the redirect.
+  `/checkout/confirmation/[orderNumber]` is a Server Component that calls
+  `getOrderByNumber(orderNumber)`, which takes **no user id**: RLS decides what
+  may be read, so another customer's order number resolves to nothing and the
+  page 404s. It shows the database's totals, not the form's, and it states that
+  payment has not been received. **It must never get a `loading.tsx`** — same
+  reason `/checkout` has none.
 
 ## Supabase foundation
 
