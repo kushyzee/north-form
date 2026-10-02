@@ -3,8 +3,7 @@
 **Built for the way you move.**
 
 A storefront for a fictional Nigerian men's fashion brand — browse a Supabase-backed
-catalogue, build a cart, sign in with Google, and place an order that the database
-validates and computes itself.
+catalogue, build a cart, sign in with Google, and place an order that the database validates and computes itself.
 
 > **Demo project.** North & Form is not a real brand. The catalogue, bank details and
 > payment instructions are fictional and for demonstration only. No payment is ever
@@ -12,14 +11,14 @@ validates and computes itself.
 
 ## Stack
 
-| Concern | Choice |
-| --- | --- |
+| Concern   | Choice                                                         |
+| --------- | -------------------------------------------------------------- |
 | Framework | Next.js 16.3.7 (App Router), React 19.2.8, TypeScript (strict) |
-| Styling | Tailwind CSS v4 (CSS-first config), shadcn/ui (`base-vega`) |
-| Backend | Supabase — Postgres, Auth, Row Level Security |
-| Email | Mailgun (transactional order confirmations) |
-| Forms | React Hook Form + Zod |
-| Testing | Vitest (Node environment) |
+| Styling   | Tailwind CSS v4 (CSS-first config), shadcn/ui (`base-vega`)    |
+| Backend   | Supabase — Postgres, Auth, Row Level Security                  |
+| Email     | Mailgun (transactional order confirmations)                    |
+| Forms     | React Hook Form + Zod                                          |
+| Testing   | Vitest (Node environment)                                      |
 
 Package manager is **pnpm**. Currency is **NGN**, formatted with the `en-NG` locale.
 
@@ -37,29 +36,29 @@ Open [http://localhost:3000](http://localhost:3000).
 
 `.env.local` is gitignored — never commit real credentials.
 
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | yes | Safe to expose; RLS is the real boundary |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | yes | Safe to expose; RLS is the real boundary |
-| `MAILGUN_API_KEY` | no | Server-side only. Omitting it skips the confirmation email — the order still succeeds |
-| `MAILGUN_DOMAIN` | no | Server-side only |
-| `MAILGUN_FROM_EMAIL` | no | Server-side only |
-| `MAILGUN_FROM_NAME` | no | Optional, defaults to the brand |
+| Variable                               | Required | Notes                                                                                 |
+| -------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | yes      | Safe to expose; RLS is the real boundary                                              |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | yes      | Safe to expose; RLS is the real boundary                                              |
+| `MAILGUN_API_KEY`                      | no       | Server-side only. Omitting it skips the confirmation email — the order still succeeds |
+| `MAILGUN_DOMAIN`                       | no       | Server-side only                                                                      |
+| `MAILGUN_FROM_EMAIL`                   | no       | Server-side only                                                                      |
+| `MAILGUN_FROM_NAME`                    | no       | Optional, defaults to the brand                                                       |
 
 Never add a `NEXT_PUBLIC_` prefix to any `MAILGUN_*` variable.
 
 ## Routes
 
-| Route | Description |
-| --- | --- |
-| `/` | Homepage |
-| `/shop` | Catalogue with Postgres-driven filter, search and sort |
-| `/shop/[slug]` | Product detail |
-| `/cart` | Client-side cart |
-| `/auth` | Google sign-in |
-| `/checkout` | Checkout form — **requires sign-in** |
-| `/checkout/confirmation/[orderNumber]` | Placed order, read back from the database |
-| `POST /api/orders` | Order creation API |
+| Route                                  | Description                                            |
+| -------------------------------------- | ------------------------------------------------------ |
+| `/`                                    | Homepage                                               |
+| `/shop`                                | Catalogue with Postgres-driven filter, search and sort |
+| `/shop/[slug]`                         | Product detail                                         |
+| `/cart`                                | Client-side cart                                       |
+| `/auth`                                | Google sign-in                                         |
+| `/checkout`                            | Checkout form — **requires sign-in**                   |
+| `/checkout/confirmation/[orderNumber]` | Placed order, read back from the database              |
+| `POST /api/orders`                     | Order creation API                                     |
 
 ## How an order is created
 
