@@ -44,7 +44,7 @@ function escapeHtml(value: string): string {
  * could be read as money having arrived. The order is genuinely received; the
  * payment genuinely is not.
  */
-export function statusLine(order: OrderDetails): string {
+function statusLine(order: OrderDetails): string {
   return isAwaitingPayment(order.status)
     ? "Order received — payment pending"
     : `Order received — status: ${order.status.replace(/_/g, " ")}`

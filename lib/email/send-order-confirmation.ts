@@ -12,19 +12,23 @@ import type { OrderDetails } from "@/lib/orders/queries"
  * about endpoints, auth or form encoding. The template above is pure and tested;
  * this module is the seam where it meets the outside world.
  *
- * The recipient is `order.customerEmail`, which came from the database — the
- * checkout request's email is never trusted for delivery, because a mistyped or
- * borrowed address would send somebody else's order details to a stranger.
+ * The recipient is passed in rather than read off the order, and deliberately so:
+ * `order.customerEmail` is a *snapshot* of whatever the customer typed at
+ * checkout, so it is not evidence that anybody at that address is entitled to
+ * this order's contents — name, phone, street address and all. The caller passes
+ * the signed-in account's verified address instead, which is proven by Google.
+ * The order keeps its own `customer_email` as the business contact record.
  */
 export async function sendOrderConfirmationEmail(
   order: OrderDetails,
+  to: string,
   timeoutMs?: number,
 ): Promise<MailgunResult> {
   const email = buildOrderConfirmationEmail(order)
 
   return sendMailgunMessage(
     {
-      to: order.customerEmail,
+      to,
       subject: email.subject,
       text: email.text,
       html: email.html,

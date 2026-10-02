@@ -5,6 +5,9 @@ import type { OrderDetails } from "@/lib/orders/queries"
 
 const ORDER_NUMBER = "NF-BBE2C1E1A3F94E10"
 
+/** The signed-in account's Google-verified address. */
+const RECIPIENT = "ade.verified@example.com"
+
 const order: OrderDetails = {
   orderNumber: ORDER_NUMBER,
   status: "awaiting_payment",
@@ -30,13 +33,50 @@ describe("notifyOrderPlaced", () => {
 
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder,
       sendEmail,
     })
 
     expect(result).toEqual({ sent: true })
     expect(loadOrder).toHaveBeenCalledWith(ORDER_NUMBER)
-    expect(sendEmail).toHaveBeenCalledWith(order)
+    // The verified account address, never the one typed into the form.
+    expect(sendEmail).toHaveBeenCalledWith(order, RECIPIENT)
+  })
+
+  it("does not fall back to the customer-typed address when there is no verified one", async () => {
+    // `order.customerEmail` is whatever the customer typed at checkout. Falling
+    // back to it would let an account holder send an order's contents — name,
+    // phone and street address — to any address they liked.
+    const loadOrder = vi.fn(async () => order)
+    const sendEmail = vi.fn(async () => ({ ok: true }))
+
+    const result = await notifyOrderPlaced({
+      orderNumber: ORDER_NUMBER,
+      recipient: null,
+      loadOrder,
+      sendEmail,
+    })
+
+    expect(result).toEqual({ sent: false, reason: "no-verified-recipient" })
+    expect(sendEmail).not.toHaveBeenCalled()
+    // Not even worth reading the order back.
+    expect(loadOrder).not.toHaveBeenCalled()
+  })
+
+  it("never passes the customer-typed address to the sender", async () => {
+    const sendEmail = vi.fn(async () => ({ ok: true }))
+
+    await notifyOrderPlaced({
+      orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
+      loadOrder: async () => order,
+      sendEmail,
+    })
+
+    for (const call of sendEmail.mock.calls) {
+      expect(call).not.toContain(order.customerEmail)
+    }
   })
 
   it("does not throw when the email sender rejects", async () => {
@@ -46,6 +86,7 @@ describe("notifyOrderPlaced", () => {
 
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => order,
       sendEmail,
     })
@@ -60,6 +101,7 @@ describe("notifyOrderPlaced", () => {
 
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => order,
       sendEmail,
     })
@@ -72,6 +114,7 @@ describe("notifyOrderPlaced", () => {
 
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => {
         throw new Error("connection reset")
       },
@@ -87,6 +130,7 @@ describe("notifyOrderPlaced", () => {
 
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => null,
       sendEmail,
     })
@@ -98,6 +142,7 @@ describe("notifyOrderPlaced", () => {
   it("treats a sender that returns nothing as a failure, not a success", async () => {
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => order,
       sendEmail: async () => undefined,
     })
@@ -108,6 +153,7 @@ describe("notifyOrderPlaced", () => {
   it("treats an unconfigured transport as a failure, not a crash", async () => {
     const result = await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => order,
       sendEmail: async () => ({ ok: false, reason: "not-configured" }),
     })
@@ -134,7 +180,7 @@ describe("notifyOrderPlaced", () => {
 
       for (const sendEmail of senders) {
         await expect(
-          notifyOrderPlaced({ orderNumber: ORDER_NUMBER, loadOrder, sendEmail }),
+          notifyOrderPlaced({ orderNumber: ORDER_NUMBER, recipient: RECIPIENT, loadOrder, sendEmail }),
         ).resolves.toBeDefined()
       }
     }
@@ -146,6 +192,7 @@ describe("notifyOrderPlaced", () => {
 
     await notifyOrderPlaced({
       orderNumber: ORDER_NUMBER,
+      recipient: RECIPIENT,
       loadOrder: async () => order,
       sendEmail: async () => {
         throw new Error("boom")

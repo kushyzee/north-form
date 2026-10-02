@@ -73,9 +73,6 @@ export const orderRequestSchema = checkoutSchema
 /** A validated `POST /api/orders` body. */
 export type OrderRequest = z.infer<typeof orderRequestSchema>
 
-/** A validated cart line, as the browser sends it. */
-export type CartLineInput = z.infer<typeof cartLineSchema>
-
 /** One cart line in the shape `private.place_order` expects. */
 export type RpcCartLine = {
   product_id: string

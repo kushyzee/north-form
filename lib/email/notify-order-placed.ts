@@ -28,11 +28,29 @@ export type NotifyOrderPlacedResult = {
 
 export async function notifyOrderPlaced(input: {
   orderNumber: string
+  /**
+   * Where to send it: the signed-in account's **verified** email.
+   *
+   * `null` means the session carried no proven address, and the send is skipped.
+   * It deliberately does not fall back to `order.customerEmail` — that value is
+   * whatever the customer typed at checkout, so falling back to it would put the
+   * order's contents back in the hands of an unverified address, which is the
+   * whole reason this parameter is passed in rather than read off the order.
+   */
+  recipient: string | null
   /** Reads the authoritative order, already scoped by RLS. */
   loadOrder: (orderNumber: string) => Promise<OrderDetails | null>
   /** Sends the confirmation. May reject; that must not propagate. */
-  sendEmail: (order: OrderDetails) => Promise<unknown>
+  sendEmail: (order: OrderDetails, to: string) => Promise<unknown>
 }): Promise<NotifyOrderPlacedResult> {
+  // Checked first: no point paying for the read-back when we could not send it.
+  if (!input.recipient) {
+    console.error(
+      `[email] order ${input.orderNumber} has no verified account email; no confirmation sent`,
+    )
+    return { sent: false, reason: "no-verified-recipient" }
+  }
+
   let order: OrderDetails | null
 
   try {
@@ -55,7 +73,7 @@ export async function notifyOrderPlaced(input: {
   }
 
   try {
-    const result = await input.sendEmail(order)
+    const result = await input.sendEmail(order, input.recipient)
     const ok = (result as { ok?: unknown } | null | undefined)?.ok === true
 
     if (!ok) {

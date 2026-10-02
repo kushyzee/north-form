@@ -55,13 +55,21 @@ export async function POST(request: Request) {
     const order = result.body as OrderSuccessBody
     await notifyOrderPlaced({
       orderNumber: order.orderNumber,
+      // The account address Google verified, not the one typed into the form.
+      // `order.customerEmail` is a snapshot for the business record and is never
+      // proof that address may receive these details.
+      // `user` is non-null whenever we reach a 201 (an anonymous caller was
+      // answered with 401 above), but the `?? null` keeps that explicit and
+      // leaves the notifier's "no verified recipient" path reachable rather than
+      // crashing.
+      recipient: user?.email ?? null,
       // Re-read through the caller's own RLS-scoped session rather than
       // assembling the email from the order the RPC just returned: the email
       // needs the line items and the delivery snapshot, and the database is the
       // only source that has them.
       loadOrder: getOrderByNumber,
-      sendEmail: (details) =>
-        sendOrderConfirmationEmail(details, EMAIL_TIMEOUT_MS),
+      sendEmail: (details, to) =>
+        sendOrderConfirmationEmail(details, to, EMAIL_TIMEOUT_MS),
     })
   }
 

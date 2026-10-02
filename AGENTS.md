@@ -363,6 +363,16 @@ Decisions worth knowing before changing anything here:
   would be an order-existence oracle.
 - **`requireAuthUser` is given this page's own path**, so a signed-out visitor
   returns to *this* order after signing in rather than to `/checkout`.
+- **The recipient is the verified account email, not the one typed in.** The
+  route passes `getAuthUser().email` — the address Google proved — into
+  `notifyOrderPlaced({ recipient })`, and the transport sends to that. It
+  deliberately does **not** fall back to `order.customer_email`, which is only a
+  snapshot of whatever the customer typed: falling back would let any account
+  holder send an order's contents (name, phone, street address) to an arbitrary
+  address using your sending domain as a relay. If the session carries no
+  verified address the send is skipped with `no-verified-recipient` and logged;
+  the order still succeeds. `orders.customer_email` keeps its own job as the
+  business contact record.
 - **The email is secondary to the order.** The route awaits
   `notifyOrderPlaced()` after a `201`, but the function cannot throw, is bounded
   by an 8-second timeout, and its result is discarded. Mailgun refusing a
@@ -523,9 +533,11 @@ gitignored — never commit real credentials.**
   three of `MAILGUN_API_KEY` / `MAILGUN_DOMAIN` / `MAILGUN_FROM_EMAIL` are
   required; if any is missing the confirmation email is skipped and the order
   still succeeds. `MAILGUN_FROM_NAME` is optional and defaults to the brand.
-- `SUPABASE_SECRET_KEY` — server-side only. Not used by Phase 4 auth (the
-  callback exchanges codes with the publishable key); it is there for the
-  server-side order-creation path in Phase 5.
+- `SUPABASE_SECRET_KEY` — **not read by any application code.** It is
+  deliberately unused: the order path calls the trusted function with the
+  *caller's own* session rather than a service-role key, so the request runs as
+  the customer under their own RLS. Listed only so a future admin-only script
+  has it documented. Do not reach for it in application code.
 
 **Google OAuth adds no environment variables.** The client secret stays in the
 Supabase dashboard, and the redirect origin is derived at runtime from
@@ -627,16 +639,19 @@ does **not** cover. That was revoked and restated explicitly:
 | `authenticated` | `SELECT` on all five tables; `UPDATE` on `profiles` only |
 | `service_role` | `ALL` (bypasses RLS; server-side only, never in the browser) |
 
-### Order creation (Phase 3 — deliberate gap)
+### Order creation — the trusted function (Phase 5B-1)
 
-There is **no client write path to `orders` or `order_items`**, by design.
-Checkout must create orders through a trusted server-side operation that
-re-reads products, prices and stock and computes the total itself. Never
-trust client-submitted prices, totals, product names, user ids or stock, and
-never add a permissive client insert policy to "make checkout work". That
-path will need a server-only secret (service role / secret key) — add it to
-`.env.example` as a placeholder when that phase starts, and keep it out of
-anything prefixed `NEXT_PUBLIC_`.
+There is **no client write path to `orders` or `order_items`**, and that is
+still the rule. Checkout creates orders through `private.place_order()`, which
+re-reads products, prices and stock and computes the total itself. Never trust
+client-submitted prices, totals, product names, user ids or stock, and never
+add a permissive client insert policy to "make checkout work".
+
+**No service-role secret is involved, and none is needed.** `POST /api/orders`
+calls the function with the *caller's own* session, so the request runs as the
+customer and is subject to exactly the RLS policies any other client request
+would face, and `auth.uid()` inside the function decides the order's owner.
+Reaching for a service-role key here would *lose* that property, not add one.
 
 ## Payment model
 
