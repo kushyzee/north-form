@@ -44,7 +44,7 @@ export function CartLineItem({ lineId }: { lineId: string }) {
       </Link>
 
       <div className="flex flex-1 flex-col gap-1">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between gap-4 pr-2">
           <div>
             <p className="text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
               {item.categoryName}
