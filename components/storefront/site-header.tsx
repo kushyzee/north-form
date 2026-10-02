@@ -1,26 +1,25 @@
-"use client"
+"use client";
 
-import type { ReactNode } from "react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { Menu, ShoppingBag } from "lucide-react"
+import type { ReactNode } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { Menu, ShoppingBag } from "lucide-react";
 
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from "@/components/ui/sheet"
-import { useCart } from "@/components/cart/cart-provider"
-import { formatItemCount } from "@/lib/format"
-import { cn } from "@/lib/utils"
+} from "@/components/ui/sheet";
+import { useCart } from "@/components/cart/cart-provider";
+import { formatItemCount } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-const NAV_LINKS = [
-  { href: "/shop", label: "Shop all" },
-] as const
+const NAV_LINKS = [{ href: "/shop", label: "Shop all" }] as const;
 
 /**
  * Persistent storefront header.
@@ -33,11 +32,11 @@ const NAV_LINKS = [
  * async Server Component. It stays a plain presentational node with no props.
  */
 export function SiteHeader({ children }: { children?: ReactNode }) {
-  const pathname = usePathname()
-  const { count, hydrated } = useCart()
+  const pathname = usePathname();
+  const { count, hydrated } = useCart();
 
   const isActive = (href: string) =>
-    pathname === href || pathname.startsWith(`${href}/`)
+    pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-sm">
@@ -54,7 +53,10 @@ export function SiteHeader({ children }: { children?: ReactNode }) {
           Built for the way you move.
         </span>
 
-        <nav aria-label="Main" className="ml-auto hidden items-center gap-6 md:flex">
+        <nav
+          aria-label="Main"
+          className="ml-auto hidden items-center gap-6 md:flex"
+        >
           {NAV_LINKS.map((link) => (
             <Link
               key={link.href}
@@ -116,7 +118,9 @@ export function SiteHeader({ children }: { children?: ReactNode }) {
             <SheetContent side="right" className="w-3/4 max-w-sm">
               <SheetHeader>
                 <SheetTitle>Menu</SheetTitle>
-                <SheetDescription>Browse the NORTH &amp; FORM catalogue.</SheetDescription>
+                <SheetDescription>
+                  Browse the NORTH &amp; FORM catalogue.
+                </SheetDescription>
               </SheetHeader>
               <nav aria-label="Mobile" className="flex flex-col gap-1 px-4">
                 {NAV_LINKS.map((link) => (
@@ -131,14 +135,18 @@ export function SiteHeader({ children }: { children?: ReactNode }) {
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
                   >
-                    {link.label}
+                    <SheetClose className="w-full text-left">
+                      {link.label}
+                    </SheetClose>
                   </Link>
                 ))}
                 <Link
                   href="/cart"
                   className="rounded-md px-3 py-3 text-base tracking-wide text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  Cart{hydrated && count > 0 ? ` (${count})` : ""}
+                  <SheetClose className="w-full text-left">
+                    Cart{hydrated && count > 0 ? ` (${count})` : ""}
+                  </SheetClose>
                 </Link>
               </nav>
             </SheetContent>
@@ -146,5 +154,5 @@ export function SiteHeader({ children }: { children?: ReactNode }) {
         </div>
       </div>
     </header>
-  )
+  );
 }
