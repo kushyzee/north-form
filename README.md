@@ -129,8 +129,9 @@ supabase/tests/        Rollback-safe database verification scripts
 proxy.ts               Session refresh (Next.js 16 replaced middleware.ts)
 ```
 
-`AGENTS.md` holds the full engineering context: the decisions behind each subsystem
-and the constraints to respect before changing them.
+`AGENTS.md` holds the engineering context for AI agents: the project status,
+the invariants to respect before changing anything, and pointers into `docs/`,
+which documents the reasoning behind each subsystem.
 
 ## Licence
 
