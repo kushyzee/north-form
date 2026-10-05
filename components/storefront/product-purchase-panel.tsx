@@ -17,31 +17,38 @@ import { cn } from "@/lib/utils";
  *  - quantity can never exceed `stock_quantity`
  *  - a zero-stock product cannot be added at all
  *
- * These are UX constraints only. The server re-checks stock during checkout.
+ * These are UX constraints only. When signed in the add goes to the server,
+ * which re-checks stock at the moment of the write — the page may have been
+ * open for a while — and its answer, not this one, decides what the cart shows.
  */
 export function ProductPurchasePanel({ product }: { product: Product }) {
-  const { addItem } = useCart();
+  const { addItem, pending, error: cartError, dismissError } = useCart();
 
   const hasSizes = product.sizes.length > 0;
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
-  const [error, setError] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState(false);
 
   const availability = getAvailability(product.stockQuantity);
   const outOfStock = availability === "out_of_stock";
   const maxQuantity = Math.max(product.stockQuantity, 1);
 
+  // The server's answer wins over this panel's local message: it knows about
+  // stock that ran out, a retired product, or a session that just expired.
+  const message = cartError?.message ?? localError;
+
   function handleAddToBag() {
-    if (outOfStock) return;
+    if (outOfStock || pending) return;
 
     // Required size not chosen — tell the user instead of silently doing nothing.
     if (hasSizes && !selectedSize) {
-      setError("Choose a size to continue.");
+      setLocalError("Choose a size to continue.");
       return;
     }
 
-    setError(null);
+    setLocalError(null);
+    dismissError();
     addItem(
       {
         productId: product.id,
@@ -92,7 +99,7 @@ export function ProductPurchasePanel({ product }: { product: Product }) {
                     checked={active}
                     onChange={() => {
                       setSelectedSize(size);
-                      setError(null);
+                      setLocalError(null);
                     }}
                     className="sr-only"
                   />
@@ -156,11 +163,12 @@ export function ProductPurchasePanel({ product }: { product: Product }) {
           type="button"
           size="lg"
           onClick={handleAddToBag}
-          disabled={outOfStock}
+          disabled={outOfStock || pending}
+          aria-busy={pending}
           className="h-12 w-full sm:w-fit sm:px-10"
         >
           <ShoppingBag aria-hidden="true" />
-          {outOfStock ? "Out of stock" : "Add to bag"}
+          {outOfStock ? "Out of stock" : pending ? "Adding…" : "Add to bag"}
         </Button>
       </div>
 
@@ -176,10 +184,11 @@ export function ProductPurchasePanel({ product }: { product: Product }) {
         </p>
       )}
 
-      {/* Form-level messaging, announced to assistive tech. */}
+      {/* Form-level messaging, announced to assistive tech. A failed add shows
+          the server's reason, not a local guess. */}
       <p role="status" aria-live="polite" className="min-h-5 text-sm">
-        {error ? (
-          <span className="text-destructive">{error}</span>
+        {message ? (
+          <span className="text-destructive">{message}</span>
         ) : justAdded ? (
           <span className="text-brand-olive">
             Added to your bag.{" "}

@@ -70,7 +70,7 @@ export function CheckoutView({
       <EmptyState
         icon={<ShoppingBag aria-hidden="true" className="size-7" />}
         title="There is nothing to check out yet"
-        description="Your bag is empty. Add a piece from the shop and come back — your bag is kept in this browser."
+        description="Your bag is empty. Add a piece from the shop and come back — your bag follows your account once you are signed in."
         action={{ href: "/shop", label: "Browse the shop" }}
       />
     )
@@ -80,12 +80,15 @@ export function CheckoutView({
     <CheckoutForm
       profile={profile}
       onOrderPlaced={(orderNumber) => {
-        // The order now lives in the database, so the browser's copy of that
-        // intent is spent and can go. The confirmation page re-reads the order
-        // from the database rather than trusting anything from this form.
-        clearCart()
-        setPlaced(true)
-        router.replace(`/checkout/confirmation/${encodeURIComponent(orderNumber)}`)
+        // The order now lives in the database, so the intent that produced it
+        // is spent and can go. When signed in this is a server write; it is not
+        // awaited, because the redirect should not wait on the network — the
+        // confirmation page reads the order back rather than trusting anything
+        // from this form, and a failed clear shows the cart rather than hiding
+        // a line the customer still has.
+        clearCart();
+        setPlaced(true);
+        router.replace(`/checkout/confirmation/${encodeURIComponent(orderNumber)}`);
       }}
     />
   )

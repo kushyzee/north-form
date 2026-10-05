@@ -162,7 +162,66 @@ describe("handleAddCartItem — ownership", () => {
       getCart: async () => cart,
     })
 
-    expect(addCartItem).toHaveBeenCalledWith(PRODUCT, "M", 2)
+    // Four arguments: the three line fields plus the (absent) migration id.
+    // There is deliberately no user id — see the comment above.
+    expect(addCartItem).toHaveBeenCalledWith(PRODUCT, "M", 2, undefined)
+    expect(JSON.stringify(addCartItem.mock.calls)).not.toContain(USER)
+  })
+})
+
+describe("handleAddCartItem — the migration id", () => {
+  const MIGRATION = "33333333-3333-4333-8333-333333333333"
+
+  it("forwards a valid migration id to the database call", async () => {
+    const addCartItem: Mock<CartEffects["addCartItem"]> = vi.fn(async () => ({ ok: true as const }))
+
+    await handleAddCartItem({
+      rawBody: JSON.stringify({ ...validAdd, migrationId: MIGRATION }),
+      userId: USER,
+      addCartItem,
+      getCart: async () => cart,
+    })
+
+    expect(addCartItem).toHaveBeenCalledWith(PRODUCT, "M", 2, MIGRATION)
+  })
+
+  it("passes undefined for an ordinary add, so the line always increments", async () => {
+    const addCartItem: Mock<CartEffects["addCartItem"]> = vi.fn(async () => ({ ok: true as const }))
+
+    await handleAddCartItem({
+      rawBody: JSON.stringify(validAdd),
+      userId: USER,
+      addCartItem,
+      getCart: async () => cart,
+    })
+
+    expect(addCartItem).toHaveBeenCalledWith(PRODUCT, "M", 2, undefined)
+  })
+
+  it("rejects a malformed migration id without calling the database", async () => {
+    const addCartItem = vi.fn(async () => ({ ok: true as const }))
+
+    const result = await handleAddCartItem({
+      rawBody: JSON.stringify({ ...validAdd, migrationId: "not-a-uuid" }),
+      userId: USER,
+      addCartItem,
+      getCart: async () => cart,
+    })
+
+    expect(result.status).toBe(400)
+    expect(addCartItem).not.toHaveBeenCalled()
+  })
+
+  it("still forwards no user id — the migration key is not ownership", async () => {
+    const addCartItem: Mock<CartEffects["addCartItem"]> = vi.fn(async () => ({ ok: true as const }))
+
+    await handleAddCartItem({
+      rawBody: JSON.stringify({ ...validAdd, migrationId: MIGRATION }),
+      userId: USER,
+      addCartItem,
+      getCart: async () => cart,
+    })
+
     expect(JSON.stringify(addCartItem.mock.calls)).not.toContain(USER)
   })
 })

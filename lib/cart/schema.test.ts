@@ -51,8 +51,11 @@ describe("cart schemas reject forged authority", () => {
     ["a total", { ...validLine, total: 1 }],
     ["a stock figure", { ...validLine, stockQuantity: 999 }],
     ["a line id", { ...validLine, lineId: `${PRODUCT}::M` }],
-    ["a migrationId", { ...validLine, migrationId: "99999999-9999-4999-8999-999999999999" }],
     ["a status", { ...validLine, status: "paid" }],
+    // `migrationId` is deliberately absent. It is the one client-supplied key
+    // the add contract now accepts (for the anonymous-cart migration) and it has
+    // its own describe block below, which also asserts the other two contracts
+    // still refuse it.
   ]
 
   for (const [label, value] of forged) {
@@ -62,6 +65,42 @@ describe("cart schemas reject forged authority", () => {
       expect(setCartItemQuantitySchema.safeParse(value).success).toBe(false)
     })
   }
+})
+
+describe("addCartItemSchema — the migration id", () => {
+  // The anonymous-cart migration needs one idempotency key. It is the only
+  // client-supplied value with server meaning, so it is worth pinning down
+  // precisely: a UUID, optional, and nothing else about it is honoured.
+  const MIGRATION = "33333333-3333-4333-8333-333333333333"
+
+  it("accepts a valid UUID", () => {
+    const parsed = addCartItemSchema.parse({ ...validLine, migrationId: MIGRATION })
+    expect(parsed.migrationId).toBe(MIGRATION)
+  })
+
+  it("stays optional, so an ordinary add is unaffected", () => {
+    const parsed = addCartItemSchema.parse(validLine)
+    expect(parsed.migrationId).toBeUndefined()
+  })
+
+  it("rejects a non-UUID rather than coercing it", () => {
+    expect(addCartItemSchema.safeParse({ ...validLine, migrationId: "not-a-uuid" }).success).toBe(false)
+  })
+
+  it("rejects an empty string", () => {
+    expect(addCartItemSchema.safeParse({ ...validLine, migrationId: "" }).success).toBe(false)
+  })
+
+  it("is not accepted on the quantity update or remove contracts", () => {
+    // Those paths have no migration semantics, so accepting one would be a key
+    // the server silently ignores.
+    expect(
+      setCartItemQuantitySchema.safeParse({ ...validLine, migrationId: MIGRATION }).success,
+    ).toBe(false)
+    expect(
+      removeCartItemSchema.safeParse({ ...validLine, migrationId: MIGRATION }).success,
+    ).toBe(false)
+  })
 })
 
 describe("setCartItemQuantitySchema", () => {

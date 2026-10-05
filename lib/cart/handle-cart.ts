@@ -50,10 +50,21 @@ export type CartEffectsError = { code?: string | null; message?: string | null }
 /** An add either succeeds, or fails with a database error. */
 type AddResult = { ok: true } | { ok: false; error: CartEffectsError }
 
-/** The injected database calls, grouped so a test can stub one operation. */
+/**
+ * The injected database calls, grouped so a test can stub one operation.
+ *
+ * `addCartItem` takes an optional `migrationId`, forwarded from the request.
+ * It is used only by the anonymous-cart migration (see `lib/cart/migrate.ts`);
+ * an ordinary add omits it and always increments.
+ */
 export type CartEffects = {
   getCart: () => Promise<Cart>
-  addCartItem: (productId: string, size: string, quantity: number) => Promise<AddResult>
+  addCartItem: (
+    productId: string,
+    size: string,
+    quantity: number,
+    migrationId?: string,
+  ) => Promise<AddResult>
   setCartItemQuantity: (
     userId: string,
     productId: string,
@@ -153,6 +164,7 @@ export async function handleAddCartItem(input: {
       request.data.productId,
       request.data.size,
       request.data.quantity,
+      request.data.migrationId,
     ),
   )
   if (failed) return failed

@@ -12,15 +12,21 @@ import { cn } from "@/lib/utils"
 /**
  * Cart page body.
  *
- * A Client Component because the cart lives in browser storage. Renders
- * nothing but a skeleton until hydration completes, so the server-rendered
+ * A Client Component because the cart is loaded in the browser — from
+ * `localStorage` when signed out, from the server when signed in. It renders
+ * nothing but a skeleton until that load completes, so the server-rendered
  * markup and the first client render always agree.
  *
- * Prices here are a snapshot for display only. Checkout must re-read products,
- * prices and stock on the server before creating an order.
+ * A failed load is shown as an error with a retry, never as an empty cart: an
+ * empty cart means "you have nothing", and telling someone that when the truth
+ * is "we could not reach the server" would be a lie about their own bag.
+ *
+ * Prices here come from the catalogue, not from anything this browser sent.
+ * Checkout re-reads products, prices and stock on the server before creating an
+ * order.
  */
 export function CartView() {
-  const { items, count, subtotal, hydrated, clearCart } = useCart()
+  const { items, count, subtotal, hydrated, pending, error, retry, clearCart } = useCart()
 
   if (!hydrated) {
     return (
@@ -38,6 +44,27 @@ export function CartView() {
           ))}
         </div>
         <div className="h-56 animate-pulse rounded-lg bg-muted" />
+      </div>
+    )
+  }
+
+  // A failure that left nothing confirmed to show. Retrying is the only useful
+  // action, so the empty-cart pitch would be actively misleading here.
+  if (error && items.length === 0) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex flex-col items-center gap-5 rounded-lg border border-dashed border-border px-6 py-20 text-center"
+      >
+        <ShoppingBag aria-hidden="true" className="size-8 text-muted-foreground" />
+        <h2 className="font-heading text-2xl">We could not load your cart</h2>
+        <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
+          {error.message}
+        </p>
+        <Button variant="outline" size="lg" onClick={retry}>
+          Try again
+        </Button>
       </div>
     )
   }
@@ -66,6 +93,26 @@ export function CartView() {
     <div className="grid gap-10 lg:grid-cols-[1fr_20rem] lg:gap-16">
       {/* Lines */}
       <section aria-label="Items in your cart">
+        {/* A failed *write* keeps the lines on screen — the cart still holds
+            whatever the server last confirmed — so the message sits with the
+            items rather than replacing them. */}
+        {error ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-6 flex items-start justify-between gap-4 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm"
+          >
+            <span className="text-destructive">{error.message}</span>
+            <button
+              type="button"
+              onClick={retry}
+              className="shrink-0 underline underline-offset-4 hover:no-underline"
+            >
+              Refresh
+            </button>
+          </div>
+        ) : null}
+
         <ul className="divide-y divide-border">
           {items.map((item) => (
             <CartLineItem key={item.lineId} lineId={item.lineId} />
@@ -79,8 +126,8 @@ export function CartView() {
           >
             Continue shopping
           </Link>
-          <Button variant="ghost" size="sm" onClick={clearCart}>
-            Clear cart
+          <Button variant="ghost" size="sm" onClick={clearCart} disabled={pending}>
+            {pending ? "Clearing…" : "Clear cart"}
           </Button>
         </div>
       </section>

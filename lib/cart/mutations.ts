@@ -40,11 +40,12 @@ type AddCartItemRpcParams = {
   p_size: string
   p_quantity: number
   /**
-   * Always null from this phase. `p_migration_id` makes the operation
-   * idempotent for the Phase 2 anonymous-cart migration; an ordinary add must
-   * always increment, so the parameter is deliberately not exposed to clients.
+   * `null` for an ordinary add, which always increments. A UUID only for the
+   * one-time anonymous-cart migration, where it makes a retried add a no-op on
+   * a line it has already been applied to. The function compares it against the
+   * caller's own line and nothing else, so it carries no authority.
    */
-  p_migration_id: null
+  p_migration_id: string | null
 }
 
 /** What the function returns once mapped and validated. */
@@ -93,6 +94,7 @@ export async function addCartItem(
   productId: string,
   size: string,
   quantity: number,
+  migrationId?: string,
 ): Promise<{ ok: true; line: AddedLine } | { ok: false; error: RpcError | null }> {
   const supabase = await createClient()
 
@@ -100,7 +102,7 @@ export async function addCartItem(
     p_product_id: productId,
     p_size: size,
     p_quantity: quantity,
-    p_migration_id: null,
+    p_migration_id: migrationId ?? null,
   }
 
   const { data, error } = await supabase.schema("private").rpc("add_cart_item", params)

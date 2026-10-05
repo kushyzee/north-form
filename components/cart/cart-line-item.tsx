@@ -9,11 +9,16 @@ import { Button } from "@/components/ui/button";
 import { formatNaira } from "@/lib/format";
 
 /**
- * One cart line. Client Component because every control mutates local cart
- * state — the authoritative price and stock come from the database at checkout.
+ * One cart line. Client Component because every control mutates the cart.
+ *
+ * When signed in each control writes to the server and the line re-renders
+ * from its answer, so nothing here decides the resulting quantity. `pending`
+ * disables the controls while a write is in flight; a failure surfaces from the
+ * parent rather than being swallowed here, because the cart as a whole still
+ * holds every other line.
  */
 export function CartLineItem({ lineId }: { lineId: string }) {
-  const { items, incrementItem, decrementItem, setQuantity, removeItem } =
+  const { items, incrementItem, decrementItem, setQuantity, removeItem, pending } =
     useCart();
   const item = items.find((entry) => entry.lineId === lineId);
 
@@ -82,7 +87,7 @@ export function CartLineItem({ lineId }: { lineId: string }) {
               size="icon-sm"
               className="h-10 w-10 rounded-none rounded-l-md"
               onClick={() => decrementItem(item.lineId)}
-              disabled={atMinQuantity}
+              disabled={atMinQuantity || pending}
             >
               <Minus aria-hidden="true" />
               <span className="sr-only">
@@ -113,7 +118,7 @@ export function CartLineItem({ lineId }: { lineId: string }) {
               size="icon-sm"
               className="h-10 w-10 rounded-none rounded-r-md"
               onClick={() => incrementItem(item.lineId)}
-              disabled={atMaxQuantity}
+              disabled={atMaxQuantity || pending}
             >
               <Plus aria-hidden="true" />
               <span className="sr-only">
@@ -128,6 +133,7 @@ export function CartLineItem({ lineId }: { lineId: string }) {
             variant="ghost"
             size="sm"
             onClick={() => removeItem(item.lineId)}
+            disabled={pending}
             className="text-muted-foreground hover:text-destructive"
           >
             <Trash2 aria-hidden="true" />

@@ -52,12 +52,22 @@ const quantity = z
  * product+size line rather than creating a second one.
  *
  * `.strict()` rejects an unknown key instead of stripping it, so a forged
- * `userId`, `unitPrice`, `total`, `stock` or `migrationId` fails loudly at
- * the edge rather than travelling quietly into the handler.
+ * `userId`, `unitPrice`, `total` or `stock` fails loudly at the edge rather than
+ * travelling quietly into the handler.
+ *
+ * `migrationId` is the one client-supplied value with server meaning, and it is
+ * deliberately narrow: a UUID that only ever selects between "increment" and
+ * "this exact add already happened". The database compares it against the
+ * migration id recorded on the **caller's own line** and nothing else, so a
+ * forged value can at worst skip an increment on your own cart — it cannot
+ * reach another user's rows, and it carries no money, ownership or authority.
+ * It exists so the one-time anonymous-cart migration is idempotent: a retry
+ * after a dropped connection must not double a line. See `lib/cart/migrate.ts`.
  */
 export const addCartItemSchema = z.strictObject({
   ...cartLineKey,
   quantity,
+  migrationId: z.uuid().optional(),
 })
 
 /** `PATCH /api/cart/items` — set a line to an absolute quantity. */

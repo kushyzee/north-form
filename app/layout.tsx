@@ -5,6 +5,7 @@ import { AuthStatus } from "@/components/auth/auth-status";
 import { CartProvider } from "@/components/cart/cart-provider";
 import { SiteFooter } from "@/components/storefront/site-footer";
 import { SiteHeader } from "@/components/storefront/site-header";
+import { getAuthUser } from "@/lib/auth/session";
 import { getCategories } from "@/lib/catalogue/queries";
 
 import "./globals.css";
@@ -38,13 +39,20 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   // route shares them rather than re-querying per page.
   const categories = await getCategories();
 
+  // The signed-in identity, read here so the client cart never has to ask who
+  // it is. This is the same verified read AuthStatus uses, and the sign-out
+  // button already calls router.refresh() — which re-renders this layout and
+  // hands CartProvider a new identity. That is the whole session-change
+  // mechanism: no client-side auth listener, and no route protection added.
+  const user = await getAuthUser();
+
   return (
     <html
       lang="en"
       className={`h-full antialiased ${geistMono.variable} ${inter.variable} ${instrumentSerif.variable}`}
     >
       <body className="flex min-h-full flex-col font-sans">
-        <CartProvider>
+        <CartProvider userId={user?.id ?? null}>
           <a
             href="#main"
             className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:text-primary-foreground"
