@@ -13,7 +13,8 @@ files it governs and says when to open it.
 
 | Document | Covers |
 | -------- | ------ |
-| [`docs/storefront.md`](./docs/storefront.md) | Catalogue reads, filter/search/sort, the cart, images, availability |
+| [`docs/storefront.md`](./docs/storefront.md) | Catalogue reads, filter/search/sort, the **client** cart, images, availability |
+| [`docs/cart.md`](./docs/cart.md) | `cart_items`, `private.add_cart_item`, the `/api/cart` routes, cart ownership (Phase 6) |
 | [`docs/checkout.md`](./docs/checkout.md) | The `/checkout` form, its auth guard, validation, totals, submit boundary |
 | [`docs/orders.md`](./docs/orders.md) | `private.place_order()`, `POST /api/orders`, confirmation page, Mailgun email, payment model |
 | [`docs/auth.md`](./docs/auth.md) | Supabase clients, session refresh, Google OAuth, redirects, dashboard config |
@@ -22,20 +23,40 @@ files it governs and says when to open it.
 
 `codebase.md` in the repo root is a generated analysis of the source tree — it
 describes *what the code is*. The `docs/` files describe *why it is that way*.
+`codebase.md` predates the cart work and is **stale**: it still lists ten
+migrations and no cart files. Regenerate it when convenient.
+
+There are two carts, and which one you are changing matters:
+
+- the **client** cart — `lib/cart/reducer.ts` + `localStorage`, documented in
+  `docs/storefront.md`, still the only cart the UI uses;
+- the **server** cart — `cart_items` + `/api/cart`, documented in
+  `docs/cart.md`, built in Phase 6 and not yet wired to the UI.
+
+They share one line identity (`productId::size`) and one set of quantity rules,
+but they are separate implementations. Phase 7 connects them.
 
 ## Project status
 
-**Phases 1–5C are complete.** The scaffold, the Supabase client foundation
-and the database schema/RLS/demo catalogue are in place, the customer-facing
-storefront (homepage, shop with filter/search/sort, product detail, cart) is
-built on top of the public catalogue, Google sign-in via Supabase Auth is
-working end to end, `/checkout` is a protected, validated checkout form,
-`POST /api/orders` calls the trusted `private.place_order()` function, and a
-placed order produces a database-backed confirmation page plus a Mailgun
-order-confirmation email.
+**Phases 1–5C are complete, and Phase 6 (the shared cart backend) is in
+place.** The scaffold, the Supabase client foundation and the database
+schema/RLS/demo catalogue are in place, the customer-facing storefront
+(homepage, shop with filter/search/sort, product detail, cart) is built on top
+of the public catalogue, Google sign-in via Supabase Auth works end to end,
+`/checkout` is a protected, validated checkout form, `POST /api/orders` calls
+the trusted `private.place_order()` function, and a placed order produces a
+database-backed confirmation page plus a Mailgun order-confirmation email.
+
+Phase 6 adds the **server-side cart**: `cart_items` with RLS, the trusted
+`private.add_cart_item()`, and the `/api/cart` + `/api/cart/items` routes. It is
+built and tested but **the web cart still uses `localStorage`** — Phase 7 wires
+the UI to it and retires storage.
 
 Deliberately **not** built yet — do not assume any of this exists:
 
+- **The web cart is not migrated to the server cart.** Phase 7 does that.
+- **The cart is not wired into checkout.** `POST /api/orders` still takes its
+  cart in the request body, which stays authoritative and re-validated.
 - **Payment verification.** An order is created `awaiting_payment` and nothing
   ever moves it on — no webhook, no admin action
 - Bank transfer flow / payment instructions beyond the confirmation copy and
@@ -43,6 +64,8 @@ Deliberately **not** built yet — do not assume any of this exists:
 - Order history — the confirmation page is the only order page
 - Admin functionality
 - Stock decrement or reservation
+- A mobile app. `/api/cart` is plain JSON with no browser dependency, so an
+  Expo client can call it as-is, but no mobile code exists.
 
 ## Stack (as scaffolded — do not churn)
 
@@ -96,11 +119,13 @@ components/cart/        Cart provider + cart UI (client)
 components/auth/        Sign-in page pieces, header auth state, sign-out
 components/checkout/    Checkout form, order summary, field wrapper (client)
 app/api/orders/         POST /api/orders — the order-creation API route
+app/api/cart/           GET/DELETE /api/cart — read and clear the cart
+app/api/cart/items/     POST/PATCH/DELETE /api/cart/items — one cart line
 lib/utils.ts          cn() re-export (shadcn convention)
 lib/format.ts         NGN / stock / item-count formatting
 lib/auth/             Open-redirect guard + server-only identity helpers
 lib/catalogue/        Domain types + server-only catalogue reads
-lib/cart/             Pure cart reducer + localStorage adapter
+lib/cart/             Client reducer + localStorage; server schema/errors/queries/mutations
 lib/checkout/         Nigeria states, delivery fees, phone, Zod schema
 lib/orders/           Request schema, error mapping, place-order, queries
 lib/email/            Confirmation template, Mailgun transport, notifier
@@ -129,9 +154,19 @@ design change, not an implementation detail.
 - Stock is validated, never mutated. Two customers can both pass the check for
   the last unit; that is a documented deferral, not a bug to fix here.
 
-**Ownership is RLS, not application logic.** `getOrderByNumber()` takes no user
-id. Return `404` for someone else's order, never `403` — a `403` would be an
-order-existence oracle.
+**Ownership is RLS, not application logic.** `getOrderByNumber()` and
+`getCart()` take no user id. Return `404` for someone else's order or cart line,
+never `403` — a `403` would be an existence oracle. Where a cart write names an
+owner in its `WHERE` clause, that id comes from the **verified** session, never
+from the request body.
+
+**The cart stores no money.** `cart_items` has no `price`, `unit_price`,
+`subtotal`, `total`, `product_name` or `stock_quantity` column. Name, price and
+stock are joined from `products` on read. Do not add a snapshot column to make a
+cart read cheaper — that is exactly how a stale price reaches a checkout, and the
+server would then have to remember not to trust it. (This is deliberately the
+opposite of `order_items`, which *does* snapshot: an order is a record, a cart
+is not.)
 
 **Redirects.** Every use of `?next=` goes through `safeRedirectPath()`. Never
 build a redirect or an `href` from a raw query value.
@@ -172,11 +207,17 @@ server-side only — never add a `NEXT_PUBLIC_` prefix.
 
 ```bash
 pnpm lint
+pnpm build                # must run before typecheck — see below
 pnpm typecheck
 pnpm test
-pnpm build
-pnpm dev                # confirm the app still starts
+pnpm dev                  # confirm the app still starts
 ```
+
+> **`pnpm typecheck` requires `pnpm build` (or `pnpm dev`) to have run at least
+> once.** `tsconfig.json` includes `.next/types/**/*.ts`, which Next.js
+> generates during a build; without it every route file fails with
+> `Cannot find name 'PageProps' / 'LayoutProps'`. That is not a code error —
+> run the build first, or the check lies to you.
 
 `pnpm test` runs Vitest over the pure logic in a Node environment — no DOM, no
 browser, no jsdom. Component rendering and responsive layout are not covered by
@@ -184,9 +225,17 @@ it and must be checked by hand.
 
 Database changes additionally require `supabase/tests/verify_phase2.sql`;
 order-creation changes require `supabase/tests/verify_phase5b.sql` — it is the
-only thing that proves the trusted function still computes money correctly. Both
-run inside a transaction ending in `ROLLBACK`. Full procedures, including the
-manual auth check, are in [`docs/reference.md`](./docs/reference.md).
+only thing that proves the trusted function still computes money correctly; and
+cart changes require `supabase/tests/verify_cart.sql`, which is the only thing
+that proves one user cannot reach another's cart. All three run inside a
+transaction ending in `ROLLBACK`. Full procedures, including the manual auth
+check, are in [`docs/reference.md`](./docs/reference.md).
+
+**A database change that adds a table or policy will break the bare count
+assertions in `verify_phase2.sql` / `verify_phase5b.sql`.** Scope them to the
+tables they are actually about rather than counting the whole `public` schema,
+so the assertion keeps testing its intent instead of becoming a tripwire for any
+future phase.
 <!-- BEGIN:nextjs-agent-rules -->
 
 

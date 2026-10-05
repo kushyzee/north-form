@@ -18,19 +18,41 @@ dashboard — add a migration.
 | `20261001182454_fix_place_order_size_membership.sql` | size membership `all` → `any` (subtotal and stock were broken) |
 | `20261001182848_fix_place_order_missing_json_keys.sql` | explicit `is null` on every cart-item key |
 | `20261001183202_fix_place_order_zero_quantity.sql` | explicit `quantity >= 1` lower bound |
+| `20261003101200_create_cart_items.sql` | `cart_items`, `cart_items_line_unique`, `validate_cart_item()`, four RLS policies, grants (Phase 6) |
+| `20261003101300_create_add_cart_item_function.sql` | `private.add_cart_item()` — the trusted merge/increment path |
+| `20261003190000_add_cart_migration_id.sql` | `migration_id` column + the idempotent-replay parameter |
 
-The last three are append-only corrections to the same function. Each was found
-by `verify_phase5b.sql`, applied as its own migration, and its header explains
-the bug — do not edit an already-recorded migration to "tidy" it.
+The last three of the Phase 5B group are append-only corrections to the same
+function. Each was found by `verify_phase5b.sql`, applied as its own migration,
+and its header explains the bug — do not edit an already-recorded migration to
+"tidy" it.
+
+> **The three `20261003…` cart migrations were applied to the live database but
+> were never committed.** They have been reconstructed from the live catalog so
+> the files and `supabase_migrations.schema_migrations` agree again, which is
+> what makes `supabase db push` a no-op. They are faithful in *behaviour* — each
+> was replayed against a live database and diffed — but the original authors'
+> comments are unrecoverable, so treat these three files as a reconstruction
+> rather than as the original text. The last two are documented in
+> [`cart.md`](./cart.md).
 
 `supabase/tests/verify_phase2.sql` re-runs every structural, RLS and
 constraint assertion against a live database. It creates fixtures inside a
 transaction that ends in `ROLLBACK`, so nothing it creates persists. Run it
 with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/verify_phase2.sql`.
+`supabase/tests/verify_cart.sql` does the same for the cart — see
+[`cart.md`](./cart.md).
+
+**Its count assertions are scoped to the five Phase 2 tables**, not to the whole
+`public` schema. `cart_items` adds a sixth table, four policies and four write
+privileges, and a bare `count(*) … where schemaname = 'public'` would fail for a
+correct schema. Scoping keeps the assertion about what it actually means — "the
+Phase 2 least-privilege matrix is intact" — instead of "nothing was ever added
+to this schema".
 
 ## Tables
 
-`profiles`, `categories`, `products`, `orders`, `order_items`.
+`profiles`, `categories`, `products`, `orders`, `order_items`, `cart_items`.
 
 Key decisions that are **not** obvious from the column list:
 
@@ -49,26 +71,36 @@ Key decisions that are **not** obvious from the column list:
   `full_name`. Do not add a client-side profile insert path.
 - **`profiles.email` is a convenience copy.** `auth.users` remains the
   authoritative identity.
-- `updated_at` is maintained by trigger on `profiles`, `products`, `orders`.
-  Trigger functions pin `search_path = ''`.
+- `updated_at` is maintained by trigger on `profiles`, `products`, `orders` and
+  `cart_items`. Trigger functions pin `search_path = ''`.
+- **`cart_items` stores no money.** No `price`, `unit_price`, `subtotal`,
+  `total`, `product_name` or `stock_quantity` column exists — name, price and
+  stock are joined from `products` on read. This is the opposite of
+  `order_items`, on purpose: see below.
 
 ## Delete behaviour — order history is protected
 
 | Relationship | Action | Why |
 | ------------ | ------ | --- |
 | `profiles.id → auth.users.id` | `CASCADE` | profile is user data with no business value |
+| `cart_items.user_id → auth.users.id` | `CASCADE` | a cart is user data with no business value |
 | `orders.user_id → auth.users.id` | `SET NULL` (column is nullable) | deleting an account must **not** destroy order history |
 | `order_items.order_id → orders.id` | `CASCADE` | items are part of that one order |
 | `order_items.product_id → products.id` | `RESTRICT` | a product that was ever ordered cannot be deleted |
+| `cart_items.product_id → products.id` | `CASCADE` | deleting a product may clear it out of carts — it was never a promise to buy |
 | `products.category_id → categories.id` | `RESTRICT` | never silently orphan a product |
 
 `order_items.product_name` and `unit_price` are **historical snapshots**. An
 old order must stay readable even if the catalogue changes. "Retire" a
 product (stock 0, `featured = false`) rather than deleting it.
 
+`cart_items` deliberately does **not** snapshot. A cart is not a record of
+anything — it is a wish list — so a product that is repriced, renamed or
+withdrawn should show its current state, not a stale copy of it.
+
 ## RLS
 
-Enabled on all five tables; deny by default. Six policies:
+Enabled on all six tables; deny by default. Ten policies:
 
 - `categories`, `products` — `SELECT` to `anon, authenticated` (public
   catalogue). **No write policy exists**: catalogue management is out of
@@ -78,6 +110,9 @@ Enabled on all five tables; deny by default. Six policies:
 - `orders` — `SELECT` own orders only. **No insert/update/delete policy.**
 - `order_items` — `SELECT` only through an order the caller owns
   (`exists` against `public.orders`), so swapping `order_id` widens nothing.
+- `cart_items` — `SELECT`/`INSERT`/`UPDATE`/`DELETE` own rows only. `UPDATE`
+  carries a `with check` as well as a `using`, so a line cannot be moved onto
+  another account. Covered in [`cart.md`](./cart.md).
 
 Policies use `(select auth.uid())` (initplan-cached), not a bare
 `auth.uid()` call.
@@ -91,8 +126,13 @@ does **not** cover. That was revoked and restated explicitly:
 | Role | Access |
 | ---- | ------ |
 | `anon` | `SELECT` on `categories`, `products` — nothing else |
-| `authenticated` | `SELECT` on all five tables; `UPDATE` on `profiles` only |
+| `authenticated` | `SELECT` on all six tables; `UPDATE` on `profiles`; `SELECT`/`INSERT`/`UPDATE`/`DELETE` on `cart_items` |
 | `service_role` | `ALL` (bypasses RLS; server-side only, never in the browser) |
+
+The `revoke` in the cart migration covers **both** roles and runs before the
+narrower `grant`. Revoking only from `anon` leaves Supabase's default
+`TRUNCATE`/`REFERENCES`/`TRIGGER` in place for `authenticated`, because a
+`grant` only adds — it does not subtract.
 
 ## Order creation — the trusted function (Phase 5B-1)
 

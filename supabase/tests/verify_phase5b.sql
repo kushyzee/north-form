@@ -164,16 +164,24 @@ select pg_temp.nf_assert(
       and privilege_type in ('INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER')) = 0,
   'authenticated still holds no write privilege on orders or order_items');
 
+-- Scoped to the five Phase 2 tables: later phases add their own tables and
+-- policies, and this assertion is about the order write-path still being
+-- closed, not about the total number of policies in the schema.
 select pg_temp.nf_assert(
-  (select count(*) from pg_policies where schemaname = 'public') = 6
+  (select count(*) from pg_policies
+     where schemaname = 'public'
+       and tablename in ('profiles','categories','products','orders','order_items')) = 6
   and (select count(*) from pg_policies
         where schemaname = 'public' and tablename in ('orders','order_items')
           and cmd <> 'SELECT') = 0,
   'the six original RLS policies are intact and still SELECT-only on orders');
 
+-- `cart_items` was added after this phase and brings its own four policies, so
+-- this counts the Phase 2 tables rather than the whole schema.
 select pg_temp.nf_assert(
-  (select count(*) from pg_tables where schemaname = 'public') = 5,
-  'no new tables were added to public');
+  (select count(*) from pg_tables where schemaname = 'public'
+     and tablename in ('profiles','categories','products','orders','order_items')) = 5,
+  'the five Phase 2 tables are the only ones this phase created');
 
 select pg_temp.nf_assert(
   (select rolconfig::text like '%private%'

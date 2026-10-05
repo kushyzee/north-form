@@ -12,6 +12,11 @@ Routes: `/` (homepage), `/shop`, `/shop/[slug]`, `/cart`. Plus `app/error.tsx`,
 | `components/cart/`            | Cart provider + cart UI (client)                  |
 | `components/storefront/`      | Site shell and catalogue presentation (mostly RSC) |
 
+This document covers the **client** cart only. The server-backed cart —
+`cart_items`, `private.add_cart_item`, `/api/cart` — is in
+[`cart.md`](./cart.md). Nothing in `components/cart/` calls it yet; Phase 7 does
+that.
+
 Decisions worth knowing before changing anything here:
 
 - **The database is the catalogue.** Nothing is hardcoded in components. All
@@ -29,9 +34,13 @@ Decisions worth knowing before changing anything here:
 - **The cart is a client-side UX snapshot, not order data.** `unitPrice` and
   `maxQuantity` are captured at add-time purely so the UI can render. Checkout
   must re-read products, prices and stock server-side and compute totals itself.
+  The server cart follows the same rule for a different reason — it stores no
+  price at all and joins `products` on read (see [`cart.md`](./cart.md)).
 - **Cart line identity is `productId::size`** — same product + same size merges,
   different sizes stay as separate lines. The reducer is pure and has no React
-  dependency; `clampQuantity` enforces the stock ceiling.
+  dependency; `clampQuantity` enforces the stock ceiling. The server cart uses
+  the identical composite (`UNIQUE (user_id, product_id, size)`), so Phase 7 can
+  hydrate one from the other.
 - **Every route is dynamically rendered** because `lib/supabase/server.ts` calls
   `cookies()`. A `revalidate` export has no effect until that changes.
 - **Images**: `next.config.ts` allows exactly one host, `placehold.co`, which is

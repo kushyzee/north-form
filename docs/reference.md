@@ -83,27 +83,31 @@ with **Inter** for UI/body (`--font-sans`). `app/layout.tsx` loads both via
 
 ## Verification
 
-Run before considering work done:
+Run before considering work done. **Note the order** — `typecheck` reads the
+route types that `build` generates, so running it first reports five phantom
+errors:
 
 ```bash
 pnpm lint
+pnpm build
 pnpm typecheck
 pnpm test
-pnpm build
-pnpm dev                # confirm the app still starts
+pnpm dev                  # confirm the app still starts
 ```
 
 `pnpm test` runs Vitest over the pure logic (checkout validation, delivery
-fees, the order request contract, error mapping and the Mailgun request
-construction) in a Node environment — no DOM, no browser, no jsdom. Component
-rendering and responsive layout are not covered by it and must be checked by
-hand.
+fees, the order request contract, the cart request contract, error mapping and
+the Mailgun request construction) in a Node environment — no DOM, no browser, no
+jsdom. Component rendering and responsive layout are not covered by it and must
+be checked by hand.
 
 Database changes additionally require re-running
 `supabase/tests/verify_phase2.sql` (see [`database.md`](./database.md)).
 Order-creation changes require `supabase/tests/verify_phase5b.sql` as well — it
 is the only thing that proves the trusted function still computes money
-correctly.
+correctly. Cart changes require `supabase/tests/verify_cart.sql` — the only
+thing that proves one user cannot reach another's cart (see
+[`cart.md`](./cart.md)).
 
 ### Verifying authentication
 

@@ -89,15 +89,24 @@ select pg_temp.nf_assert(
                        'public.orders'::regclass, 'public.order_items'::regclass)) = 5,
   'five foreign keys across the application tables');
 
+-- Scoped to the five Phase 2 tables: `cart_items` adds two more CASCADE
+-- foreign keys (user and product), which are correct for a cart but are not
+-- part of the order-history guarantee this assertion protects.
 select pg_temp.nf_assert(
   (select count(*) from pg_constraint
     where contype = 'f' and connamespace = 'public'::regnamespace
+      and conrelid in ('public.profiles'::regclass, 'public.products'::regclass,
+                       'public.orders'::regclass, 'public.order_items'::regclass)
       and confdeltype = 'c') = 2
   and (select count(*) from pg_constraint
     where contype = 'f' and connamespace = 'public'::regnamespace
+      and conrelid in ('public.profiles'::regclass, 'public.products'::regclass,
+                       'public.orders'::regclass, 'public.order_items'::regclass)
       and confdeltype = 'n') = 1
   and (select count(*) from pg_constraint
     where contype = 'f' and connamespace = 'public'::regnamespace
+      and conrelid in ('public.profiles'::regclass, 'public.products'::regclass,
+                       'public.orders'::regclass, 'public.order_items'::regclass)
       and confdeltype = 'r') = 2,
   'delete actions are 2 cascade, 1 set null, 2 restrict — order history is protected');
 
@@ -134,8 +143,10 @@ select pg_temp.nf_assert(
 -- 2. Policies and grants
 -- ==================================================================
 select pg_temp.nf_assert(
-  (select count(*) from pg_policies where schemaname = 'public') = 6,
-  'six RLS policies exist');
+  (select count(*) from pg_policies
+     where schemaname = 'public'
+       and tablename in ('profiles','categories','products','orders','order_items')) = 6,
+  'six RLS policies cover the five Phase 2 tables');
 
 select pg_temp.nf_assert(
   (select count(*) from pg_policies
@@ -158,14 +169,20 @@ select pg_temp.nf_assert(
 select pg_temp.nf_assert(
   (select count(*) from information_schema.role_table_grants
     where grantee = 'authenticated' and table_schema = 'public'
+      and table_name in ('profiles','categories','products','orders','order_items')
       and privilege_type = 'SELECT') = 5,
-  'authenticated can select all five tables');
+  'authenticated can select all five Phase 2 tables');
 
+-- Scoped to the five Phase 2 tables on purpose: `cart_items` (added later)
+-- brings SELECT plus three write verbs of its own. This assertion is about the
+-- original least-privilege matrix, not a total across every table in the schema,
+-- so a later phase cannot silently widen it.
 select pg_temp.nf_assert(
   (select count(*) from information_schema.role_table_grants
     where grantee = 'authenticated' and table_schema = 'public'
+      and table_name in ('profiles','categories','products','orders','order_items')
       and privilege_type in ('INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER')) = 1,
-  'authenticated holds exactly one write privilege: UPDATE on profiles');
+  'on the five Phase 2 tables, authenticated holds exactly one write privilege: UPDATE on profiles');
 
 select pg_temp.nf_assert(
   (select count(*) from information_schema.role_table_grants
