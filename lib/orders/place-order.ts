@@ -4,7 +4,7 @@ import {
   mapPlacedOrder,
   type PlaceOrderFn,
 } from "@/lib/orders/handle-place-order"
-import { createClient } from "@/lib/supabase/server"
+import { createRequestClient } from "@/lib/supabase/server"
 
 /**
  * The database call behind `POST /api/orders`.
@@ -25,7 +25,7 @@ import { createClient } from "@/lib/supabase/server"
  * is subject to exactly the RLS policies any other client request would face.
  */
 export const placeOrder: PlaceOrderFn = async (params) => {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const { data, error } = await supabase
     .schema("private")

@@ -1,6 +1,6 @@
 import "server-only"
 
-import { createClient } from "@/lib/supabase/server"
+import { createRequestClient } from "@/lib/supabase/server"
 
 /**
  * Reading the caller's cart.
@@ -116,7 +116,7 @@ function toCartLine(value: unknown): CartLine | null {
  * indistinguishable here on purpose — the caller re-reads after each write.
  */
 export async function getCart(): Promise<Cart> {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const { data, error } = await supabase
     .from("cart_items")

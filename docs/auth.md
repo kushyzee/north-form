@@ -21,6 +21,85 @@ Rules:
   re-validated.
 - Server Components cannot write cookies; `proxy.ts` performs the refresh.
 
+## Two transports, one auth system
+
+The browser and a native client present the **same Supabase access token** over
+different transports. There is still exactly one auth system and one authority —
+`auth.uid()` inside the database — only the way the token arrives differs.
+
+| Transport            | Presented as                              | Verified by           |
+| -------------------- | ----------------------------------------- | --------------------- |
+| Browser              | Supabase httpOnly session cookies         | `getClaims()`         |
+| Native (Expo, later) | `Authorization: Bearer <access-token>`    | `getClaims(token)`    |
+
+| File                       | Role                                                             |
+| -------------------------- | ---------------------------------------------------------------- |
+| `lib/auth/bearer.ts`       | Pure `parseBearerToken()` + the precedence rule. Unit tested     |
+| `lib/auth/session.ts`      | `getAuthUser()` — the identity both transports resolve to         |
+| `lib/supabase/server.ts`   | `getBearerToken()`, `verifyBearerToken()`, `createRequestClient()` |
+
+A native client has no cookie jar, so it cannot use the browser path at all.
+`Authorization: Bearer <token>` is how the same credential crosses that gap.
+**The browser flow above is unchanged** — cookies, `proxy.ts` refresh and the
+OAuth callback all behave exactly as before.
+
+### Precedence — the rule, and why it is a rule
+
+```
+no Authorization header              → cookie session
+Authorization: Bearer <valid>       → that token's user
+Authorization: Bearer <invalid>     → anonymous, 401. NEVER the cookie user
+```
+
+The third line is the whole point, and it is easy to get wrong. `getAuthUser()`
+and `createRequestClient()` are two halves of one request: the first decides
+*who the caller is*, the second decides *what credential the database calls
+carry*. When they decided independently, an unverifiable token produced `401`
+from the first and the **cookie client** from the second — so a request carrying
+a stale or forged token while the browser was signed in went on to read and
+write as the signed-in browser user. That is a privilege escalation, and no
+amount of correctness in `getAuthUser()` prevents it.
+
+Both now derive from `resolveCredentialSource(token, verified)` in
+`lib/auth/bearer.ts`, which returns `'cookie' | 'bearer' | 'anonymous'`.
+`cookie` is reachable **only** when no token was parsed, so the disagreement is
+impossible rather than merely unlikely.
+
+### Verification is separate from the database client
+
+This split is forced by the SDK, not chosen for tidiness. A client configured
+with `accessToken` has **no usable `auth` namespace** — the SDK documents this
+outright — so `getClaims()` cannot run on the very client that needs the token.
+Hence `verifyBearerToken()` runs on an ordinary cookie client purely to *check*
+the token, and `createRequestClient()` then builds the client that *uses* it.
+
+`getClaims(token)` checks the signature against Supabase's published JWKS, so a
+forged, tampered or expired token cannot name a user it does not belong to.
+**The `sub` of that verified token is the identity** — nothing the caller sent
+is read as an identity.
+
+When verification fails, `createRequestClient()` returns an **anonymous** client
+— no `accessToken`, no cookie adapter — so the request reaches PostgREST as
+`anon` and is refused by RLS (`42501`). Never the cookie client.
+
+### Rules for this area
+
+- **Never trust the header.** `parseBearerToken()` only recognises the shape.
+  Verification is `getClaims()`'s job and is the single place it happens.
+- **Never let a failed bearer fall back to cookies.** A supplied credential
+  decides the outcome outright. If in doubt, return anonymous.
+- **Never use a service-role key on either transport.** Both clients are built
+  from the same publishable key; only the *credential* differs. A service-role
+  client would bypass the customer's own RLS, which is the property that makes
+  this safe.
+- **Never log a token.** Rejections log the reason (`Invalid JWT signature`),
+  never the credential.
+- A header that carries no token at all — bare `Bearer`, `Basic abc`, `Token
+  abc`, whitespace — is treated as *absent*, so the browser path still applies.
+  That is a deliberate compatibility choice, not a security one: such a request
+  presents nothing to verify, and degrades to what it would have been without
+  the header. Only a *present* token locks the request out of cookies.
+
 ## Authentication (Phase 4 — Google OAuth)
 
 ```
@@ -62,10 +141,13 @@ never construct a redirect or an `href` from a raw query value.
 ### Session and identity
 
 - `proxy.ts` still owns session refresh. There is no second mechanism, and no
-  second middleware. The callback does not duplicate it.
-- Server-side identity is `getAuthUser()` in `lib/auth/session.ts` (server-only),
-  built on `getClaims()`. The `id` it returns is the `sub` of a verified token —
-  never a client-supplied user id.
+  second middleware. The callback does not duplicate it. It refreshes
+  **cookies** only — a bearer request has no cookie to refresh, which is fine,
+  because `verifyBearerToken()` checks the token itself.
+- Server-side identity is `getAuthUser()` in `lib/auth/session.ts` (server-only).
+  The `id` it returns is the `sub` of a verified token — cookie or bearer — never
+  a client-supplied user id. See
+  [Two transports](#two-transports-one-auth-system).
 - `requireAuthUser(nextPath)` protects `/checkout` and the confirmation page. It
   protects a *route*; RLS still protects the *data*. It is used from the page
   itself only — see [`checkout.md`](./checkout.md) for why the guard is not

@@ -1,6 +1,6 @@
 import "server-only"
 
-import { createClient } from "@/lib/supabase/server"
+import { createRequestClient } from "@/lib/supabase/server"
 
 /**
  * Reading an order for the confirmation page.
@@ -77,7 +77,7 @@ function toLine(value: unknown): OrderLineDetails | null {
 export async function getOrderByNumber(
   orderNumber: string,
 ): Promise<OrderDetails | null> {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const { data, error } = await supabase
     .from("orders")

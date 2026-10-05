@@ -1,6 +1,6 @@
 import "server-only"
 
-import { createClient } from "@/lib/supabase/server"
+import { createRequestClient } from "@/lib/supabase/server"
 import type { RpcError } from "@/lib/orders/errors"
 
 /**
@@ -96,7 +96,7 @@ export async function addCartItem(
   quantity: number,
   migrationId?: string,
 ): Promise<{ ok: true; line: AddedLine } | { ok: false; error: RpcError | null }> {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const params: AddCartItemRpcParams = {
     p_product_id: productId,
@@ -146,7 +146,7 @@ export async function setCartItemQuantity(
   size: string,
   quantity: number,
 ): Promise<CartWriteResult> {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const { data, error } = await supabase
     .from("cart_items")
@@ -181,7 +181,7 @@ export async function removeCartItem(
   productId: string,
   size: string,
 ): Promise<CartWriteResult> {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const { error } = await supabase
     .from("cart_items")
@@ -206,7 +206,7 @@ export async function removeCartItem(
  * reports success even when no rows matched.
  */
 export async function clearCart(userId: string): Promise<CartWriteResult> {
-  const supabase = await createClient()
+  const supabase = await createRequestClient()
 
   const { error } = await supabase.from("cart_items").delete().eq("user_id", userId)
 

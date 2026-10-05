@@ -64,8 +64,9 @@ Deliberately **not** built yet — do not assume any of this exists:
 - Order history — the confirmation page is the only order page
 - Admin functionality
 - Stock decrement or reservation
-- A mobile app. `/api/cart` is plain JSON with no browser dependency, so an
-  Expo client can call it as-is, but no mobile code exists.
+- A mobile app. The API accepts `Authorization: Bearer <access-token>` as well as
+  cookies, so `/api/cart` is callable from a native client — but no mobile code
+  exists.
 
 ## Stack (as scaffolded — do not churn)
 
@@ -123,7 +124,8 @@ app/api/cart/           GET/DELETE /api/cart — read and clear the cart
 app/api/cart/items/     POST/PATCH/DELETE /api/cart/items — one cart line
 lib/utils.ts          cn() re-export (shadcn convention)
 lib/format.ts         NGN / stock / item-count formatting
-lib/auth/             Open-redirect guard + server-only identity helpers
+lib/auth/             Open-redirect guard, bearer parsing/precedence, server-only
+                      identity helpers
 lib/catalogue/        Domain types + server-only catalogue reads
 lib/cart/             Client reducer + localStorage; server schema/errors/queries/mutations
 lib/checkout/         Nigeria states, delivery fees, phone, Zod schema
@@ -172,7 +174,20 @@ is not.)
 build a redirect or an `href` from a raw query value.
 
 **Never log the request.** Only the SQLSTATE and the function's machine code; on
-rejection, the *path* of the first bad field, never its value.
+rejection, the *path* of the first bad field, never its value. A bearer token is
+a credential: log the rejection reason, never the token.
+
+**A failed bearer token never becomes a cookie session.** A request presents its
+identity one of two ways — Supabase httpOnly cookies, or
+`Authorization: Bearer <access-token>` — and there is one auth system behind
+both. **A supplied bearer token decides the outcome outright:** it verifies, so
+the request acts as that user; it does not, so the request is *anonymous* and is
+answered `401`. It must never silently continue as the signed-in browser user,
+because `getAuthUser()` returning `null` does not stop `createRequestClient()`
+from handing the database a cookie-backed client. Both derive their answer from
+`resolveCredentialSource()` in `lib/auth/bearer.ts` — keep it that way, or the
+two will disagree again. No service-role key on either transport. See
+[`docs/auth.md`](./docs/auth.md).
 
 **Email is secondary to the order.** A Mailgun failure must never fail an order
 — the email is skipped instead. The recipient is the verified account address

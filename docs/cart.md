@@ -13,6 +13,8 @@ built the backend only. See [Remaining work](#remaining-work) below.
 | `lib/cart/handle-cart.ts`     | Request decisions, effects injected (testable)         |
 | `lib/cart/queries.ts`         | `server-only` read, joins the catalogue                |
 | `lib/cart/mutations.ts`       | `server-only` writes (RPC + RLS-scoped statements)     |
+| `lib/auth/bearer.ts`          | Bearer parsing + the auth precedence rule               |
+| `lib/supabase/server.ts`      | `createRequestClient()` — cookie or bearer, one shape   |
 | `app/api/cart/route.ts`       | `GET` read · `DELETE` clear                            |
 | `app/api/cart/items/route.ts` | `POST` add · `PATCH` quantity · `DELETE` remove        |
 
@@ -40,7 +42,7 @@ Failures use the orders envelope, `{ error: { code, message } }`:
 
 | Code                  | Status | When                                             |
 | --------------------- | ------ | ------------------------------------------------ |
-| `UNAUTHENTICATED`     | 401    | no session                                       |
+| `UNAUTHENTICATED`     | 401    | no session, or the bearer token did not verify  |
 | `INVALID_REQUEST`     | 400    | malformed body or failed Zod validation          |
 | `INVALID_QUANTITY`    | 400    | quantity below 1                                 |
 | `INVALID_SIZE`        | 400    | product does not offer that size                 |
@@ -48,6 +50,21 @@ Failures use the orders envelope, `{ error: { code, message } }`:
 | `CART_ITEM_NOT_FOUND` | 404    | no such line in **your** cart                    |
 | `INSUFFICIENT_STOCK`  | 409    | quantity exceeds what remains                    |
 | `CART_FAILED`         | 500    | anything unexpected (never leaks the DB message) |
+
+The routes are plain JSON with no browser dependency, so a native client calls
+them as-is — it only has to present its credential:
+
+```
+Authorization: Bearer <supabase-access-token>
+```
+
+`401` covers both "no session" and "a token we could not verify". **A failed
+bearer token never falls back to the browser cookie session**, so a native
+request cannot end up acting as whoever is signed in to the web app. That
+precedence rule is documented in
+[`auth.md` → Two transports](./auth.md#two-transports-one-auth-system), and
+`getCart()` and the mutations reach the database through
+`createRequestClient()` rather than the cookie client.
 
 ## Decisions worth knowing before changing anything here
 
@@ -106,8 +123,12 @@ client), following the same injected-effects pattern as `lib/orders/`.
 
 - **Phase 7** — point the web cart at these routes and retire `localStorage`.
   This is where `migration_id` becomes useful.
-- **Mobile** — an Expo client can call these routes as-is; no mobile-specific
-  work is needed here.
+- **Mobile** — the API side is ready: these routes accept
+  `Authorization: Bearer <access-token>` and no longer depend on the browser
+  cookie session. An Expo client can call them as-is, but **no mobile code
+  exists** and the client itself is the next thing to build. Note that lines are
+  addressed by `productId` + `size`, not by a row id, so there is no `[lineId]`
+  route to call.
 - The cart is **not** wired into checkout yet. `POST /api/orders` still takes
   its cart in the request body, which remains authoritative and re-validated.
 - **`CART_ITEM_NOT_FOUND` is 404, never 403.** Under RLS "not there" and "not
